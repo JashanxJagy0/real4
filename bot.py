@@ -9180,8 +9180,10 @@ def calculate_cashout(bot_score, bet_amount, game_type, game_mode="normal", game
         # If bot scored max, user can only tie (very low cashout)
         # If bot scored min, user has high chance to win
         if bot_score >= user_max:
-            # Bot has maximum, user can only tie
+            # Bot has maximum, user can only tie by also rolling max
             win_prob = 0.0
+            # Probability of rolling exactly user_max depends on game mechanics
+            # For simplicity, use 1/possible_outcomes as tie chance
             tie_prob = 1.0 / (user_max - user_min + 1)
         else:
             # Calculate probability user scores higher than bot
@@ -9192,8 +9194,9 @@ def calculate_cashout(bot_score, bet_amount, game_type, game_mode="normal", game
     else:
         # Crazy mode: lowest score wins
         if bot_score <= user_min:
-            # Bot has minimum, user can only tie
+            # Bot has minimum, user can only tie by also rolling min
             win_prob = 0.0
+            # Probability of rolling exactly user_min depends on game mechanics
             tie_prob = 1.0 / (user_max - user_min + 1)
         else:
             # Calculate probability user scores lower than bot
@@ -11381,7 +11384,7 @@ async def pvb_cashout_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     game['cashout_amount'] = cashout_amount
     profit = cashout_amount - pvb_game['bet_amount']
     
-    # Update stats (cashout counts as neither win nor loss for stats purposes)
+    # Update stats (cashout counts as a loss for stats purposes)
     update_stats_on_bet(user.id, game_id, pvb_game['bet_amount'], False, multiplier=0, context=context)
     update_pnl(user.id)
     save_user_data(user.id)
@@ -11447,6 +11450,21 @@ async def pvb_roll_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Game will continue via dice handler when user sends emoji
 
+# --- Helper class for creating fake updates ---
+class FakeMessage:
+    """Helper class to create fake message objects for callback-initiated games"""
+    def __init__(self, text, chat, from_user, query_message):
+        self.text = text
+        self.chat = chat
+        self.from_user = from_user
+        self._query_message = query_message
+        
+    async def reply_text(self, *args, **kwargs):
+        return await self._query_message.reply_text(*args, **kwargs)
+        
+    async def reply_dice(self, *args, **kwargs):
+        return await self._query_message.reply_dice(*args, **kwargs)
+
 # --- PvB Play Again Callback ---
 async def pvb_playagain_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start a new PvB game with same parameters"""
@@ -11479,25 +11497,14 @@ async def pvb_playagain_callback(update: Update, context: ContextTypes.DEFAULT_T
     context.user_data['game_type'] = game_type
     context.user_data['bot_rolls_first'] = True  # Keep bot rolling first
     
-    # Create a fake update to pass to play_vs_bot_game
-    class FakeMessage:
-        def __init__(self, text, chat, from_user):
-            self.text = text
-            self.chat = chat
-            self.from_user = from_user
-            
-        async def reply_text(self, *args, **kwargs):
-            return await query.message.reply_text(*args, **kwargs)
-            
-        async def reply_dice(self, *args, **kwargs):
-            return await query.message.reply_dice(*args, **kwargs)
-    
+    # Create a fake update using shared helper class
     fake_update = Update(
         update_id=query.message.message_id,
         message=FakeMessage(
             text=f"/pvb {game_type}",
             chat=query.message.chat,
-            from_user=user
+            from_user=user,
+            query_message=query.message
         )
     )
     fake_update.effective_user = user
@@ -11539,25 +11546,14 @@ async def pvb_double_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     context.user_data['game_type'] = game_type
     context.user_data['bot_rolls_first'] = True  # Keep bot rolling first
     
-    # Create a fake update to pass to play_vs_bot_game
-    class FakeMessage:
-        def __init__(self, text, chat, from_user):
-            self.text = text
-            self.chat = chat
-            self.from_user = from_user
-            
-        async def reply_text(self, *args, **kwargs):
-            return await query.message.reply_text(*args, **kwargs)
-            
-        async def reply_dice(self, *args, **kwargs):
-            return await query.message.reply_dice(*args, **kwargs)
-    
+    # Create a fake update using shared helper class
     fake_update = Update(
         update_id=query.message.message_id,
         message=FakeMessage(
             text=f"/pvb {game_type}",
             chat=query.message.chat,
-            from_user=user
+            from_user=user,
+            query_message=query.message
         )
     )
     fake_update.effective_user = user
