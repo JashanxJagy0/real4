@@ -4402,7 +4402,9 @@ async def check_and_award_level_up(user_id: int, context: ContextTypes.DEFAULT_T
     claimed_rewards = user_stats[user_id].get("claimed_level_rewards", [])
     
     for level_name, level_wager, bonus in ALL_LEVELS:
-        if total_wager >= level_wager and level_name not in claimed_rewards:
+        if total_wager < level_wager:
+            break  # Levels are ordered, no need to check further
+        if level_name not in claimed_rewards:
             # Award bonus
             user_wallets[user_id] += bonus
             user_stats[user_id].setdefault("claimed_level_rewards", []).append(level_name)
@@ -13709,7 +13711,7 @@ def create_progress_bar(progress, total, length=10):
     """Creates a text-based progress bar."""
     if total <= 0:
         return "▬" * length
-    filled_length = int(length * progress // total)
+    filled_length = min(length, int(length * progress // total))
     bar = '■' * filled_length + '□' * (length - filled_length)
     return bar
 
