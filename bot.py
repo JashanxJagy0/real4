@@ -3905,6 +3905,18 @@ async def check_bet_limits(update: Update, bet_amount: float, game_name: str, us
         return False
     return True
 
+def check_bet_limits_silent(bet_amount: float, game_name: str) -> bool:
+    """Check bet limits without sending messages (for callback handlers)"""
+    limits = bot_settings.get('game_limits', {}).get(game_name, {})
+    min_bet = limits.get('min', MIN_BALANCE)
+    max_bet = limits.get('max')
+    
+    if bet_amount < min_bet:
+        return False
+    if max_bet is not None and bet_amount > max_bet:
+        return False
+    return True
+
 # ===== DASHBOARD IMAGE GENERATION FUNCTIONS =====
 
 async def get_user_profile_picture(context: ContextTypes.DEFAULT_TYPE, user_id: int):
@@ -6091,8 +6103,14 @@ async def coin_flip_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             store_provably_fair_record(game_id, "coinflip", game["server_seed"], game["client_seed"], game["nonce"], 
                                        result_data=f"Streak: {game['streak']}, Result: {bot_choice}")
             
-            # Add provably fair button
-            keyboard = [[await create_provably_fair_button(game_id, context)]]
+            # Add provably fair button and Play Again/Double buttons
+            keyboard = [
+                [await create_provably_fair_button(game_id, context)],
+                [
+                    InlineKeyboardButton("🔄 Play Again", callback_data=f"flip_again_{game_id}_{user.id}"),
+                    InlineKeyboardButton("2️⃣ Double", callback_data=f"flip_double_{game_id}_{user.id}")
+                ]
+            ]
             
             await query.edit_message_text(
                 f"❌ <b>Wrong!</b> You picked {pick}, but the coin landed on {bot_choice}.\n\n"
@@ -6120,8 +6138,14 @@ async def coin_flip_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         store_provably_fair_record(game_id, "coinflip", game["server_seed"], game["client_seed"], game["nonce"], 
                                    result_data=f"Streak: {game['streak']}, Multiplier: {multiplier:.2f}x")
         
-        # Add provably fair button
-        keyboard = [[await create_provably_fair_button(game_id, context)]]
+        # Add provably fair button and Play Again/Double buttons
+        keyboard = [
+            [await create_provably_fair_button(game_id, context)],
+            [
+                InlineKeyboardButton("🔄 Play Again", callback_data=f"flip_again_{game_id}_{user.id}"),
+                InlineKeyboardButton("2️⃣ Double", callback_data=f"flip_double_{game_id}_{user.id}")
+            ]
+        ]
         
         await query.edit_message_text(
             f"💸 <b>Cashed Out!</b>\n\n🎉 You won <b>${win_amount:.2f}</b>!\n"
@@ -6130,6 +6154,86 @@ async def coin_flip_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
         # del game_sessions[game_id] # FIX: Don't delete history
+
+async def flip_replay_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle Play Again and Double buttons for coinflip game"""
+    query = update.callback_query
+    user = query.from_user
+    
+    parts = query.data.split("_")
+    action = parts[1]  # "again" or "double"
+    game_id = parts[2]
+    button_user_id = int(parts[3])
+    
+    # Check if button is for this user
+    if user.id != button_user_id:
+        await query.answer("This button is not for you!", show_alert=True)
+        return
+    
+    await query.answer()
+    
+    # Get original game data
+    original_game = game_sessions.get(game_id)
+    if not original_game:
+        await query.answer("Original game not found!", show_alert=True)
+        return
+    
+    # Determine bet amount
+    original_bet = original_game["bet_amount"]
+    
+    if action == "double":
+        bet = original_bet * 2
+    else:  # "again"
+        bet = original_bet
+    
+    # Check if user has enough balance
+    if user_wallets.get(user.id, 0.0) < bet:
+        await query.answer("Insufficient balance!", show_alert=True)
+        return
+    
+    # Check bet limits
+    if not check_bet_limits_silent(bet, 'coin_flip'):
+        await query.answer(f"Bet must be between ${MIN_BALANCE:.2f} and ${MAX_BET:.2f}", show_alert=True)
+        return
+    
+    # Deduct bet
+    user_wallets[user.id] -= bet
+    save_user_data(user.id)
+    
+    # Use user's provably fair seeds and increment nonce at game start
+    seeds = get_user_seeds(user.id)
+    current_nonce = seeds["nonce"]
+    increment_user_nonce(user.id)
+    new_game_id = generate_unique_id("CF")
+    
+    game_sessions[new_game_id] = {
+        "id": new_game_id,
+        "game_type": "coin_flip",
+        "user_id": user.id,
+        "bet_amount": bet,
+        "status": "active",
+        "timestamp": str(datetime.now(timezone.utc)),
+        "streak": 0,
+        "server_seed": seeds["server_seed"],
+        "client_seed": seeds["client_seed"],
+        "nonce": current_nonce
+    }
+    await ensure_user_in_wallets(user.id, user.username, context=context)
+    if 'game_sessions' not in user_stats[user.id]: user_stats[user.id]['game_sessions'] = []
+    user_stats[user.id]['game_sessions'].append(new_game_id)
+    save_user_data(user.id)
+    
+    keyboard = [
+        [InlineKeyboardButton("🪙 Heads", callback_data=f"flip_pick_{new_game_id}_Heads"),
+         InlineKeyboardButton("🪙 Tails", callback_data=f"flip_pick_{new_game_id}_Tails")]
+    ]
+    
+    await query.edit_message_text(
+        f"🪙 <b>Coin Flip Started!</b> (ID: <code>{new_game_id}</code>)\n\n💰 Bet: ${bet:.2f}\nChoose Heads or Tails!\n\n"
+        f"🎯 Current Multiplier: 1.94x",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
 # 2B. HIGH-LOW CARD GAME
 # High-Low multiplier table based on probability
@@ -7292,10 +7396,134 @@ async def dice_roll_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     update_pnl(user.id)
     save_user_data(user.id)
 
+    # Add Play Again and Double buttons
+    keyboard = [
+        [
+            InlineKeyboardButton("🔄 Play Again", callback_data=f"dr_again_{game_id}_{user.id}"),
+            InlineKeyboardButton("2️⃣ Double", callback_data=f"dr_double_{game_id}_{user.id}")
+        ]
+    ]
+    
     await update.message.reply_text(
         f"🎲 <b>Dice Roll Result</b> (ID: <code>{game_id}</code>)\n\n🎯 Result: <b>{dice_result}</b>\n"
         f"🎲 Your Choice: {choice}\n💰 Your Bet: ${bet_amount:.2f}\n\n{result_text}",
-        parse_mode=ParseMode.HTML
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def dr_replay_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle Play Again and Double buttons for dice roll game"""
+    query = update.callback_query
+    user = query.from_user
+    
+    parts = query.data.split("_")
+    action = parts[1]  # "again" or "double"
+    game_id = parts[2]
+    button_user_id = int(parts[3])
+    
+    # Check if button is for this user
+    if user.id != button_user_id:
+        await query.answer("This button is not for you!", show_alert=True)
+        return
+    
+    await query.answer()
+    
+    # Get original game data
+    original_game = game_sessions.get(game_id)
+    if not original_game:
+        await query.answer("Original game not found!", show_alert=True)
+        return
+    
+    # Determine bet amount
+    original_bet = original_game["bet_amount"]
+    choice = original_game["choice"]
+    
+    if action == "double":
+        bet_amount = original_bet * 2
+    else:  # "again"
+        bet_amount = original_bet
+    
+    # Check if user has enough balance
+    if user_wallets.get(user.id, 0.0) < bet_amount:
+        await query.answer("Insufficient balance!", show_alert=True)
+        return
+    
+    # Check bet limits
+    if not check_bet_limits_silent(bet_amount, 'dice_roll'):
+        await query.answer(f"Bet must be between ${MIN_BALANCE:.2f} and ${MAX_BET:.2f}", show_alert=True)
+        return
+    
+    # Deduct bet
+    user_wallets[user.id] -= bet_amount
+    save_user_data(user.id)
+    
+    # Send rolling message
+    await query.edit_message_text(f"🎲 Rolling the dice...")
+    
+    # Determine chat type and wait time
+    chat_type = query.message.chat.type if hasattr(query.message.chat, 'type') else "private"
+    animation_wait = await smart_rate_limit(query.message.chat_id, chat_type)
+    
+    try:
+        dice_msg = await context.bot.send_dice(chat_id=query.message.chat_id, emoji="🎲")
+        dice_result = dice_msg.dice.value
+        await asyncio.sleep(animation_wait)
+    except Exception as e:
+        logging.error(f"Error sending dice in dr_replay_callback: {e}")
+        # Refund the bet on error
+        user_wallets[user.id] += bet_amount
+        save_user_data(user.id)
+        await query.edit_message_text("❌ An error occurred while rolling the dice. Your bet has been refunded.")
+        return
+    
+    new_game_id = generate_unique_id("DR")
+    
+    # Determine win/loss
+    win = False
+    multiplier = 0
+    valid_numbers = ['1', '2', '3', '4', '5', '6']
+    
+    if choice in valid_numbers:
+        if int(choice) == dice_result: win, multiplier = True, 5.96
+    elif choice == "even":
+        if dice_result in [2, 4, 6]: win, multiplier = True, 1.96
+    elif choice == "odd":
+        if dice_result in [1, 3, 5]: win, multiplier = True, 1.96
+    elif choice == "high":
+        if dice_result in [4, 5, 6]: win, multiplier = True, 1.96
+    elif choice == "low":
+        if dice_result in [1, 2, 3]: win, multiplier = True, 1.96
+    
+    if win:
+        winnings = bet_amount * multiplier
+        user_wallets[user.id] += winnings
+        result_text = f"🎉 You win ${winnings:.2f}! (Multiplier: {multiplier}x)"
+        update_stats_on_bet(user.id, new_game_id, bet_amount, True, multiplier=multiplier, context=context)
+    else:
+        result_text = f"😢 You lose ${bet_amount:.2f}. Try again!"
+        update_stats_on_bet(user.id, new_game_id, bet_amount, False, context=context)
+    
+    game_sessions[new_game_id] = {
+        "id": new_game_id, "game_type": "dice_roll", "user_id": user.id,
+        "bet_amount": bet_amount, "status": "completed", "timestamp": str(datetime.now(timezone.utc)),
+        "win": win, "multiplier": multiplier, "choice": choice, "result": dice_result
+    }
+    update_pnl(user.id)
+    save_user_data(user.id)
+    
+    # Add Play Again and Double buttons
+    keyboard = [
+        [
+            InlineKeyboardButton("🔄 Play Again", callback_data=f"dr_again_{new_game_id}_{user.id}"),
+            InlineKeyboardButton("2️⃣ Double", callback_data=f"dr_double_{new_game_id}_{user.id}")
+        ]
+    ]
+    
+    await query.edit_message_text(
+        f"🎲 <b>Dice Roll Result</b> (ID: <code>{new_game_id}</code>)\n\n🎯 Result: <b>{dice_result}</b>\n"
+        f"🎲 Your Choice: {choice}\n💰 Your Bet: ${bet_amount:.2f}\n\n{result_text}",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 # 5. TOWER GAME
@@ -9331,7 +9559,120 @@ async def predict_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
     update_pnl(user.id)
     save_user_data(user.id)
-    await update.message.reply_text(f"{result_text}\nID: <code>{game_id}</code>", parse_mode=ParseMode.HTML)
+    
+    # Add Play Again and Double buttons
+    keyboard = [
+        [
+            InlineKeyboardButton("🔄 Play Again", callback_data=f"predict_again_{game_id}_{user.id}"),
+            InlineKeyboardButton("2️⃣ Double", callback_data=f"predict_double_{game_id}_{user.id}")
+        ]
+    ]
+    
+    await update.message.reply_text(
+        f"{result_text}\nID: <code>{game_id}</code>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def predict_replay_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle Play Again and Double buttons for predict game"""
+    query = update.callback_query
+    user = query.from_user
+    
+    parts = query.data.split("_")
+    action = parts[1]  # "again" or "double"
+    game_id = parts[2]
+    button_user_id = int(parts[3])
+    
+    # Check if button is for this user
+    if user.id != button_user_id:
+        await query.answer("This button is not for you!", show_alert=True)
+        return
+    
+    await query.answer()
+    
+    # Get original game data
+    original_game = game_sessions.get(game_id)
+    if not original_game:
+        await query.answer("Original game not found!", show_alert=True)
+        return
+    
+    # Determine bet amount
+    original_bet = original_game["bet_amount"]
+    direction = original_game["choice"]
+    
+    if action == "double":
+        bet_amount = original_bet * 2
+    else:  # "again"
+        bet_amount = original_bet
+    
+    # Check if user has enough balance
+    if user_wallets.get(user.id, 0.0) < bet_amount:
+        await query.answer("Insufficient balance!", show_alert=True)
+        return
+    
+    # Check bet limits
+    if not check_bet_limits_silent(bet_amount, 'predict'):
+        await query.answer(f"Bet must be between ${MIN_BALANCE:.2f} and ${MAX_BET:.2f}", show_alert=True)
+        return
+    
+    # Deduct bet
+    user_wallets[user.id] -= bet_amount
+    save_user_data(user.id)
+    
+    # Send rolling message
+    await query.edit_message_text(f"Rolling the dice... 🎲")
+    
+    # Determine chat type and wait time
+    chat_type = query.message.chat.type if hasattr(query.message.chat, 'type') else "private"
+    animation_wait = await smart_rate_limit(query.message.chat_id, chat_type)
+    
+    try:
+        dice_msg = await context.bot.send_dice(chat_id=query.message.chat_id, emoji="🎲")
+        outcome = dice_msg.dice.value
+        await asyncio.sleep(animation_wait)
+    except Exception as e:
+        logging.error(f"Error sending dice in predict_replay_callback: {e}")
+        # Refund the bet on error
+        user_wallets[user.id] += bet_amount
+        save_user_data(user.id)
+        await query.edit_message_text("❌ An error occurred while rolling the dice. Your bet has been refunded.")
+        return
+    
+    new_game_id = generate_unique_id("PRD")
+    
+    win = (direction == "up" and outcome in [4, 5, 6]) or (direction == "down" and outcome in [1, 2, 3])
+    
+    if win:
+        winnings = bet_amount * 2
+        user_wallets[user.id] += winnings
+        result_text = f"Result: {outcome} 🎲\n🎉 You won! You receive ${winnings:.2f}."
+        update_stats_on_bet(user.id, new_game_id, bet_amount, True, multiplier=2, context=context)
+    else:
+        result_text = f"Result: {outcome} 🎲\n😢 You lost! Better luck next time."
+        update_stats_on_bet(user.id, new_game_id, bet_amount, False, context=context)
+    
+    game_sessions[new_game_id] = {
+        "id": new_game_id, "game_type": "predict", "user_id": user.id,
+        "bet_amount": bet_amount, "status": "completed", "timestamp": str(datetime.now(timezone.utc)),
+        "win": win, "multiplier": 2 if win else 0, "choice": direction, "result": outcome
+    }
+    update_pnl(user.id)
+    save_user_data(user.id)
+    
+    # Add Play Again and Double buttons
+    keyboard = [
+        [
+            InlineKeyboardButton("🔄 Play Again", callback_data=f"predict_again_{new_game_id}_{user.id}"),
+            InlineKeyboardButton("2️⃣ Double", callback_data=f"predict_double_{new_game_id}_{user.id}")
+        ]
+    ]
+    
+    await query.edit_message_text(
+        f"{result_text}\nID: <code>{new_game_id}</code>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
 # --- LIMBO GAME FUNCTIONS ---
 @check_banned
@@ -15840,6 +16181,9 @@ def main():
     app.add_handler(CallbackQueryHandler(xdxw_bot_first_callback, pattern=r"^xdxw_bot_first_")) # NEW - XdX'w bot rolls first
     app.add_handler(CallbackQueryHandler(level_all_command, pattern=r"^level_all$")) # NEW
     app.add_handler(CallbackQueryHandler(levels_callback, pattern=r"^levels_")) # NEW - Levels pagination
+    app.add_handler(CallbackQueryHandler(dr_replay_callback, pattern=r"^dr_(again|double)_")) # NEW - Dice roll replay
+    app.add_handler(CallbackQueryHandler(predict_replay_callback, pattern=r"^predict_(again|double)_")) # NEW - Predict replay
+    app.add_handler(CallbackQueryHandler(flip_replay_callback, pattern=r"^flip_(again|double)_")) # NEW - Coinflip replay
     app.add_handler(CallbackQueryHandler(price_update_callback, pattern=r"^price_update_")) # NEW
     app.add_handler(CallbackQueryHandler(game_info_callback, pattern=r"^game_")); app.add_handler(CallbackQueryHandler(blackjack_callback, pattern=r"^bj_"))
     app.add_handler(CallbackQueryHandler(coin_flip_callback, pattern=r"^flip_")); app.add_handler(CallbackQueryHandler(tower_callback, pattern=r"^tower_"))
