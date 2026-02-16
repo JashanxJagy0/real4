@@ -13435,6 +13435,15 @@ async def level_command(update: Update, context: ContextTypes.DEFAULT_TYPE, from
     
     current_name, current_threshold, current_bonus = current_level
     
+    # Determine user's current tier for "View All Levels" button
+    user_tier = "Bronze"  # Default
+    if current_name != "None":
+        for tier in LEVEL_ORDER:
+            for level_name, _, _ in LEVELS_DATA[tier]:
+                if level_name == current_name:
+                    user_tier = tier
+                    break
+    
     text = f"🦄 <b>Your Current Level: {current_name}</b>\n\n"
     text += f"💰 <b>Total Wagered:</b> ${total_wager:,.2f}\n\n"
     
@@ -13458,7 +13467,7 @@ async def level_command(update: Update, context: ContextTypes.DEFAULT_TYPE, from
         text += f"💸 <b>Wager needed:</b> ${wager_needed:,.2f}\n"
 
     keyboard = [
-        [InlineKeyboardButton("📜 View All Levels", callback_data="levels_Bronze")],
+        [InlineKeyboardButton("📜 View All Levels", callback_data=f"levels_{user_tier}")],
         [InlineKeyboardButton("🔙 Back to More", callback_data="main_more")]
     ]
     
@@ -15799,7 +15808,7 @@ def main():
     app.add_handler(CallbackQueryHandler(xdxw_playbot_callback, pattern=r"^xdxw_playbot_")) # NEW - XdX'w play with bot
     app.add_handler(CallbackQueryHandler(xdxw_bot_first_callback, pattern=r"^xdxw_bot_first_")) # NEW - XdX'w bot rolls first
     app.add_handler(CallbackQueryHandler(level_all_command, pattern=r"^level_all$")) # NEW
-    app.add_handler(CallbackQueryHandler(levels_tier_callback, pattern=r"^levels_")) # NEW - Level tier pagination
+    app.add_handler(CallbackQueryHandler(levels_tier_callback, pattern=r"^levels_[A-Z]")) # NEW - Level tier pagination (more specific pattern)
     app.add_handler(CallbackQueryHandler(price_update_callback, pattern=r"^price_update_")) # NEW
     app.add_handler(CallbackQueryHandler(game_info_callback, pattern=r"^game_")); app.add_handler(CallbackQueryHandler(blackjack_callback, pattern=r"^bj_"))
     app.add_handler(CallbackQueryHandler(coin_flip_callback, pattern=r"^flip_")); app.add_handler(CallbackQueryHandler(tower_callback, pattern=r"^tower_"))
