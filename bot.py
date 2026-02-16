@@ -593,6 +593,12 @@ TIER_RAKEBACK = {
     "Diamond": 9, "Emerald": 11, "Ruby": 13, "Sapphire": 15
 }
 
+# Tier-specific emojis for level display
+TIER_EMOJI = {
+    "Bronze": "🥉", "Silver": "🥈", "Gold": "🥇", "Platinum": "⭐",
+    "Diamond": "💎", "Emerald": "🟢", "Ruby": "🔴", "Sapphire": "🔵"
+}
+
 # Pre-calculate navigation map for the pagination buttons
 LEVEL_NAVIGATION = {}
 for i, tier in enumerate(LEVEL_ORDER):
@@ -3104,7 +3110,7 @@ def get_text(user_id_or_key, key_or_lang=None, **kwargs):
 
 async def safe_edit_message(query, text, reply_markup=None, parse_mode=None, disable_web_page_preview=None):
     """
-    Safely edit a message. If the source is a PhotoMessage, try to edit caption first.
+    Safely edit a message. If the source is a PhotoMessage in DMs, delete it and send new text message.
     In groups, avoid deleting messages to prevent disappearing menus.
     Automatically sets menu ownership if reply_markup is provided.
     """
@@ -3117,18 +3123,18 @@ async def safe_edit_message(query, text, reply_markup=None, parse_mode=None, dis
             disable_web_page_preview=disable_web_page_preview
         )
     except Exception:
-        # If it's a photo message, try to edit caption
-        try:
-            await query.edit_message_caption(
-                caption=text,
-                reply_markup=reply_markup,
-                parse_mode=parse_mode
-            )
-        except Exception:
-            # If editing caption fails, check if we're in a group
-            chat_type = query.message.chat.type
-            if chat_type in ["group", "supergroup"]:
-                # NEW: In groups, don't delete - just send a new message as reply
+        # edit_message_text failed - likely a photo message
+        chat_type = query.message.chat.type
+        if chat_type in ["group", "supergroup"]:
+            # In groups: try editing caption first to keep the message visible
+            try:
+                await query.edit_message_caption(
+                    caption=text,
+                    reply_markup=reply_markup,
+                    parse_mode=parse_mode
+                )
+            except Exception:
+                # If editing caption fails, send a new message as reply
                 try:
                     new_message = await query.message.reply_text(
                         text=text,
@@ -3142,18 +3148,23 @@ async def safe_edit_message(query, text, reply_markup=None, parse_mode=None, dis
                     return
                 except Exception:
                     pass
-            else:
-                # In DMs, we can safely delete and send new
-                try:
-                    await query.message.delete()
-                except Exception:
-                    pass
-                await query.message.reply_text(
-                    text=text,
-                    reply_markup=reply_markup,
-                    parse_mode=parse_mode,
-                    disable_web_page_preview=disable_web_page_preview
-                )
+        else:
+            # In DMs: delete the photo message and send a new text-only message
+            # This makes the picture "disappear" when navigating via inline buttons
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
+            new_message = await query.message.reply_text(
+                text=text,
+                reply_markup=reply_markup,
+                parse_mode=parse_mode,
+                disable_web_page_preview=disable_web_page_preview
+            )
+            # Set ownership on the new message
+            if reply_markup is not None and hasattr(query, 'from_user'):
+                set_menu_owner(new_message, query.from_user.id)
+            return
     
     # Automatically set menu ownership when there's a keyboard
     if reply_markup is not None and hasattr(query, 'from_user'):
@@ -7480,17 +7491,19 @@ def build_tower_keyboard(game_state):
             safe_pos = selected_tiles[floor] if floor < len(selected_tiles) else None
             
             for col in range(tiles_per_floor):
-                if col == safe_pos:
+                if col == snake_pos and status != 'active':
+                    # Reveal snake after game ends (on all floors including unreached)
+                    # This must be checked BEFORE safe_pos because when user hits a snake,
+                    # safe_pos == snake_pos and we want to show snake emoji, not tree
+                    btn_dict = apply_button_style(
+                        InlineKeyboardButton(TILE["snake"], callback_data=f"tower_noop"),
+                        'danger'  # Red background
+                    )
+                elif col == safe_pos:
                     # User's safe pick - show as green tree
                     btn_dict = apply_button_style(
                         InlineKeyboardButton(TILE["safe"], callback_data=f"tower_noop"),
                         'success'  # Green background
-                    )
-                elif col == snake_pos and status != 'active':
-                    # Reveal snake after game ends (on all floors including unreached)
-                    btn_dict = apply_button_style(
-                        InlineKeyboardButton(TILE["snake"], callback_data=f"tower_noop"),
-                        'danger'  # Red background
                     )
                 else:
                     # Other tiles
@@ -13726,21 +13739,24 @@ async def level_command(update: Update, context: ContextTypes.DEFAULT_TYPE, from
     current_name = current[0]
     tier = current_name.split()[0] if current_name != "None" else "Bronze"
     rakeback = TIER_RAKEBACK.get(tier, 1)
+    tier_emoji = TIER_EMOJI.get(tier, "🦄")
     
-    text = f"🦄 <b>Your Level: {current_name}</b>\n\n"
+    text = f"{tier_emoji} <b>Your Level: {current_name}</b>\n\n"
     
     if next_level is None:
         text += "🏆 You have reached the maximum level!\n"
         text += f"💰 Total Wagered: ${total_wager:,.2f}"
     else:
         next_name, next_wager, next_bonus = next_level
+        next_tier = next_name.split()[0]
+        next_emoji = TIER_EMOJI.get(next_tier, "🦄")
         progress = total_wager - current[1]
         total_for_level = next_wager - current[1]
         
         bar = _progress_bar(total_wager, next_wager)
         percentage = (progress / total_for_level * 100) if total_for_level > 0 else 100
         
-        text += f"<b>Progress to {next_name}:</b>\n"
+        text += f"<b>Progress to {next_emoji} {next_name}:</b>\n"
         text += f"{bar} ({percentage:.1f}%)\n\n"
         text += f"💰 <b>Wagered:</b> ${total_wager:,.2f} / ${next_wager:,.2f}\n"
         text += f"📊 <b>Wager Needed:</b> ${next_wager - total_wager:,.2f}\n"
@@ -13775,13 +13791,14 @@ async def level_all_command(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     user = update.effective_user
     total_wager = _get_total_wager(user.id) if user else 0.0
     
-    text = f"🦄 <b>{tier} Levels</b> 🦄\n\n"
+    tier_emoji = TIER_EMOJI.get(tier, "🦄")
+    text = f"{tier_emoji} <b>{tier} Levels</b> {tier_emoji}\n\n"
     rakeback = TIER_RAKEBACK.get(tier, 1)
     text += f"💸 Rakeback Rate: {rakeback}%\n\n"
     
     for name, wager, bonus in LEVELS_DATA[tier]:
         reached = "✅" if total_wager >= wager else "⬜"
-        text += (f"{reached} <b>{name}</b>\n"
+        text += (f"{reached} {tier_emoji} <b>{name}</b>\n"
                  f"  Wager: ${wager:,} | Bonus: ${bonus}\n")
     
     # Build navigation keyboard
@@ -13789,9 +13806,11 @@ async def level_all_command(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     nav_row = []
     nav = LEVEL_NAVIGATION[tier]
     if nav["prev"]:
-        nav_row.append(apply_button_style(InlineKeyboardButton(f"⬅️ {nav['prev']}", callback_data=f"levels_{nav['prev']}"), 'primary'))
+        prev_emoji = TIER_EMOJI.get(nav['prev'], "")
+        nav_row.append(apply_button_style(InlineKeyboardButton(f"⬅️ {prev_emoji} {nav['prev']}", callback_data=f"levels_{nav['prev']}"), 'primary'))
     if nav["next"]:
-        nav_row.append(apply_button_style(InlineKeyboardButton(f"{nav['next']} ➡️", callback_data=f"levels_{nav['next']}"), 'primary'))
+        next_emoji = TIER_EMOJI.get(nav['next'], "")
+        nav_row.append(apply_button_style(InlineKeyboardButton(f"{next_emoji} {nav['next']} ➡️", callback_data=f"levels_{nav['next']}"), 'primary'))
     if nav_row:
         keyboard.append(nav_row)
     keyboard.append([InlineKeyboardButton("🔙 Back to My Level", callback_data="main_level")])
