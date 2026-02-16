@@ -546,21 +546,114 @@ ACHIEVEMENTS = {
     "referral_master": {"name": "🤝 Connector", "description": "Refer 5 active users.", "emoji": "🤝", "type": "referrals", "value": 5},
 }
 ## NEW FEATURE - Level System ##
-LEVELS = [
-    {"level": 0, "name": "None", "wager_required": 0, "reward": 0, "rakeback_percentage": 0.01},
-    {"level": 1, "name": "Bronze", "wager_required": 10000, "reward": 15, "rakeback_percentage": 0.03},
-    {"level": 2, "name": "Silver", "wager_required": 50000, "reward": 30, "rakeback_percentage": 0.04},
-    {"level": 3, "name": "Gold", "wager_required": 100000, "reward": 60, "rakeback_percentage": 0.06},
-    {"level": 4, "name": "Platinum I", "wager_required": 250000, "reward": 100, "rakeback_percentage": 0.07},
-    {"level": 5, "name": "Platinum II", "wager_required": 500000, "reward": 200, "rakeback_percentage": 0.08},
-    {"level": 6, "name": "Platinum III", "wager_required": 1000000, "reward": 400, "rakeback_percentage": 0.09},
-    {"level": 7, "name": "Platinum IV", "wager_required": 2500000, "reward": 800, "rakeback_percentage": 0.09},
-    {"level": 8, "name": "Platinum V", "wager_required": 5000000, "reward": 1600, "rakeback_percentage": 0.10},
-    {"level": 9, "name": "Platinum VI", "wager_required": 10000000, "reward": 3200, "rakeback_percentage": 0.10},
-    {"level": 10, "name": "Diamond I", "wager_required": 25000000, "reward": 6400, "rakeback_percentage": 0.11},
-    {"level": 11, "name": "Diamond II", "wager_required": 50000000, "reward": 25600, "rakeback_percentage": 0.11},
-    {"level": 12, "name": "Diamond III", "wager_required": 100000000, "reward": 51200, "rakeback_percentage": 0.12},
+
+# --- NEW LEVEL CONFIGURATION ---
+LEVEL_ORDER = [
+    "Bronze", "Silver", "Gold", "Platinum", "Diamond", 
+    "Emerald", "Ruby", "Sapphire"
 ]
+
+LEVELS_DATA = {
+    "Bronze": [
+        ("Bronze I", 100, 1), ("Bronze II", 500, 2), ("Bronze III", 1000, 2.5),
+        ("Bronze IV", 2500, 7.5), ("Bronze V", 5000, 12.5),
+    ],
+    "Silver": [
+        ("Silver I", 10000, 25), ("Silver II", 15200, 26), ("Silver III", 20500, 26.5),
+        ("Silver IV", 26000, 27.5), ("Silver V", 32000, 30),
+    ],
+    "Gold": [
+        ("Gold I", 39000, 35), ("Gold II", 48000, 45), ("Gold III", 58000, 50),
+        ("Gold IV", 69000, 55), ("Gold V", 81000, 60),
+    ],
+    "Platinum": [
+        ("Platinum I", 94000, 65), ("Platinum II", 107500, 67.5), ("Platinum III", 122000, 72.5),
+        ("Platinum IV", 138000, 80), ("Platinum V", 155000, 85),
+    ],
+    "Diamond": [
+        ("Diamond I", 173000, 90), ("Diamond II", 192000, 95), ("Diamond III", 211500, 97.5),
+        ("Diamond IV", 232000, 102), ("Diamond V", 253000, 105),
+    ],
+    "Emerald": [
+        ("Emerald I", 275000, 110), ("Emerald II", 298000, 115), ("Emerald III", 322000, 120),
+        ("Emerald IV", 347000, 125), ("Emerald V", 373000, 130),
+    ],
+    "Ruby": [
+        ("Ruby I", 400000, 135), ("Ruby II", 428000, 140), ("Ruby III", 457000, 145),
+        ("Ruby IV", 487000, 150), ("Ruby V", 518000, 155),
+    ],
+    "Sapphire": [
+        ("Sapphire I", 550000, 160), ("Sapphire II", 583000, 165), ("Sapphire III", 617000, 170),
+        ("Sapphire IV", 652000, 175), ("Sapphire V", 688000, 180),
+    ]
+}
+
+# Pre-calculate navigation map for the pagination buttons
+LEVEL_NAVIGATION = {}
+for i, tier in enumerate(LEVEL_ORDER):
+    prev_t = LEVEL_ORDER[i-1] if i > 0 else None
+    next_t = LEVEL_ORDER[i+1] if i < len(LEVEL_ORDER)-1 else None
+    LEVEL_NAVIGATION[tier] = {"prev": prev_t, "next": next_t}
+
+def _flatten_levels():
+    """Return [(level_name, threshold_wager, bonus), ...] in progression order."""
+    flat = []
+    for tier in LEVEL_ORDER:
+        for name, wager, bonus in LEVELS_DATA[tier]:
+            flat.append((name, wager, bonus))
+    return flat
+
+ALL_LEVELS = _flatten_levels()
+
+# Rakeback percentages by tier (for backward compatibility)
+TIER_RAKEBACK = {
+    "Bronze": 0.01,   # 1%
+    "Silver": 0.03,   # 3%
+    "Gold": 0.05,     # 5%
+    "Platinum": 0.07, # 7%
+    "Diamond": 0.09,  # 9%
+    "Emerald": 0.11,  # 11%
+    "Ruby": 0.13,     # 13%
+    "Sapphire": 0.15  # 15%
+}
+
+def _get_tier_from_level_name(level_name: str) -> str:
+    """Extract tier from level name (e.g., 'Bronze I' -> 'Bronze')"""
+    if level_name == "None":
+        return "Bronze"
+    for tier in LEVEL_ORDER:
+        if level_name.startswith(tier):
+            return tier
+    return "Bronze"
+
+def _get_total_wager(user_id: int) -> float:
+    """Get total wager from user_stats (JSON) instead of SQL."""
+    if user_id not in user_stats:
+        return 0.0
+    return user_stats[user_id].get("bets", {}).get("amount", 0.0)
+
+def _current_and_next_level(total_wager: float):
+    """Find current level by highest threshold <= total_wager."""
+    curr_idx = -1
+    for i, (name, threshold, bonus) in enumerate(ALL_LEVELS):
+        if total_wager >= threshold:
+            curr_idx = i
+        else:
+            break
+    
+    current = ALL_LEVELS[curr_idx] if curr_idx >= 0 else ("None", 0, 0)
+    # Next level is the one immediately after curr_idx
+    next_idx = curr_idx + 1
+    next_level = ALL_LEVELS[next_idx] if next_idx < len(ALL_LEVELS) else None
+    return current, next_level
+
+def _progress_bar(current, target, length=10):
+    """Generate a visual progress bar."""
+    if target == 0: return "▬" * length
+    pct = min(1.0, current / target)
+    fill = int(pct * length)
+    return "🔘" * fill + "▬" * (length - fill)
+
 ## NEW FEATURE - Language Support ##
 # Comprehensive language system with 6 supported languages loaded from text files
 def get_user_lang(user_id):
@@ -4293,45 +4386,59 @@ async def check_and_award_achievements(user_id, context, multiplier=0):
                     logging.warning(f"Could not send achievement notification to user {user_id}")
 ## NEW FEATURE - Level System Logic ##
 def get_user_level(user_id: int):
-    """Determines a user's current level based on their total wagered amount."""
+    """Determines a user's current level based on their total wagered amount.
+    Returns a dictionary for backward compatibility with rakeback system."""
     if user_id not in user_stats:
-        return LEVELS[0]
+        return {
+            "name": "None",
+            "wager_required": 0,
+            "reward": 0,
+            "rakeback_percentage": 1.0  # 1%
+        }
     
     wagered = user_stats[user_id].get("bets", {}).get("amount", 0.0)
-    current_level = LEVELS[0]
-    for level_data in reversed(LEVELS):
-        if wagered >= level_data["wager_required"]:
-            current_level = level_data
-            break
-    return current_level
+    current, _ = _current_and_next_level(wagered)
+    level_name, threshold, bonus = current
+    
+    # Get rakeback percentage based on tier
+    tier = _get_tier_from_level_name(level_name)
+    rakeback_pct = TIER_RAKEBACK.get(tier, 0.01) * 100  # Convert to percentage (e.g., 0.01 -> 1.0)
+    
+    return {
+        "name": level_name,
+        "wager_required": threshold,
+        "reward": bonus,
+        "rakeback_percentage": rakeback_pct
+    }
 
 async def check_and_award_level_up(user_id: int, context: ContextTypes.DEFAULT_TYPE):
     """Checks for level-up, awards reward, and notifies the user."""
     if user_id not in user_stats:
         return
 
-    current_level_data = get_user_level(user_id)
-    level_num = current_level_data["level"]
-    
+    total_wager = _get_total_wager(user_id)
     claimed_rewards = user_stats[user_id].get("claimed_level_rewards", [])
+    
+    # Check all levels that should have been claimed
+    for level_name, level_wager, bonus in ALL_LEVELS:
+        if total_wager >= level_wager and level_name not in claimed_rewards:
+            # Award the level bonus
+            user_wallets[user_id] += bonus
+            user_stats[user_id].setdefault("claimed_level_rewards", []).append(level_name)
+            save_user_data(user_id)
+            
+            # Notify the user
+            try:
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=(f"🎉 <b>Level Up!</b> 🎉\n\n"
+                          f"Congratulations! You have reached <b>{level_name}</b>.\n"
+                          f"You have been awarded a one-time bonus of <b>${bonus:.2f}</b>!"),
+                    parse_mode=ParseMode.HTML
+                )
+            except (BadRequest, Forbidden):
+                logging.warning(f"Could not send level-up notification to user {user_id}")
 
-    if level_num > 0 and level_num not in claimed_rewards:
-        reward_amount = current_level_data["reward"]
-        user_wallets[user_id] += reward_amount
-        user_stats[user_id].setdefault("claimed_level_rewards", []).append(level_num)
-        save_user_data(user_id)
-        
-        # Notify the user
-        try:
-            await context.bot.send_message(
-                chat_id=user_id,
-                text=(f"🎉 <b>Level Up!</b> 🎉\n\n"
-                      f"Congratulations! You have reached <b>Level {level_num} ({current_level_data['name']})</b>.\n"
-                      f"You have been awarded a one-time bonus of <b>${reward_amount:.2f}</b>!"),
-                parse_mode=ParseMode.HTML
-            )
-        except (BadRequest, Forbidden):
-            logging.warning(f"Could not send level-up notification to user {user_id}")
 
 async def process_referral_commission(user_id, amount, commission_type):
     if user_id not in user_stats or not user_stats[user_id].get('referral', {}).get('referrer_id'):
@@ -9033,6 +9140,87 @@ async def execute_group_challenge_game(update: Update, context: ContextTypes.DEF
         parse_mode=ParseMode.HTML
     )
 
+# --- Cashout Calculation for PvB Games ---
+def calculate_cashout(bot_score, bet_amount, game_type, game_mode="normal", game_rolls=1):
+    """
+    Calculate cashout offer based on win probability.
+    
+    Args:
+        bot_score: Bot's total score
+        bet_amount: User's bet amount
+        game_type: Type of game (dice, darts, bowling, football, basket)
+        game_mode: 'normal' (highest wins) or 'crazy' (lowest wins)
+        game_rolls: Number of rolls (1, 2, or 3)
+    
+    Returns:
+        float: Cashout offer amount
+    """
+    # Determine score range based on game type
+    if game_type in ["dice", "dice_bot", "darts", "bowling", "bowl"]:
+        min_score = 1
+        max_score = 6
+    elif game_type in ["football", "goal", "basket"]:
+        min_score = 1
+        max_score = 5
+    elif game_type == "slots":
+        min_score = 1
+        max_score = 64
+    else:
+        # Default to dice range
+        min_score = 1
+        max_score = 6
+    
+    # Calculate possible score range for user (considering number of rolls)
+    user_min = min_score * game_rolls
+    user_max = max_score * game_rolls
+    
+    # Calculate win probability
+    if game_mode == "normal":
+        # Normal mode: highest score wins
+        # If bot scored max, user can only tie (very low cashout)
+        # If bot scored min, user has high chance to win
+        if bot_score >= user_max:
+            # Bot has maximum, user can only tie by also rolling max
+            win_prob = 0.0
+            # Probability of rolling exactly user_max depends on game mechanics
+            # For simplicity, use 1/possible_outcomes as tie chance
+            tie_prob = 1.0 / (user_max - user_min + 1)
+        else:
+            # Calculate probability user scores higher than bot
+            possible_outcomes = user_max - user_min + 1
+            winning_outcomes = user_max - bot_score
+            win_prob = winning_outcomes / possible_outcomes
+            tie_prob = 1.0 / possible_outcomes
+    else:
+        # Crazy mode: lowest score wins
+        if bot_score <= user_min:
+            # Bot has minimum, user can only tie by also rolling min
+            win_prob = 0.0
+            # Probability of rolling exactly user_min depends on game mechanics
+            tie_prob = 1.0 / (user_max - user_min + 1)
+        else:
+            # Calculate probability user scores lower than bot
+            possible_outcomes = user_max - user_min + 1
+            winning_outcomes = bot_score - user_min
+            win_prob = winning_outcomes / possible_outcomes
+            tie_prob = 1.0 / possible_outcomes
+    
+    # Potential win amount (double the bet)
+    potential_win = bet_amount * 2
+    
+    # Calculate expected value
+    # Win gives full payout, tie returns bet
+    expected_value = (win_prob * potential_win) + (tie_prob * bet_amount)
+    
+    # Apply house edge (90% of expected value)
+    cashout_offer = expected_value * 0.90
+    
+    # Ensure cashout is at least 10% of bet (minimum offer)
+    # and at most 180% of bet (maximum offer, less than full win)
+    cashout_offer = max(bet_amount * 0.10, min(cashout_offer, bet_amount * 1.80))
+    
+    return round(cashout_offer, 2)
+
 # --- Play vs Bot main logic (bot rolls real emoji) ---
 async def play_vs_bot_game(update: Update, context: ContextTypes.DEFAULT_TYPE, game_type: str, target_score: int):
     user = update.effective_user
@@ -9132,11 +9320,38 @@ async def play_vs_bot_game(update: Update, context: ContextTypes.DEFAULT_TYPE, g
         bot_rolls_text = " + ".join(str(r) for r in bot_rolls)
         
         game_sessions[game_id]["waiting_for"] = "user"
+        game_sessions[game_id]["bot_score"] = bot_total  # Store bot score for this round
+        
+        # Calculate cashout offer
+        cashout_amount = calculate_cashout(bot_total, bet_amount, game_type, game_mode, game_rolls)
+        
+        # Store game state in context for callbacks
+        context.user_data['pvb_game'] = {
+            'game_id': game_id,
+            'bot_score': bot_total,
+            'cashout_amount': cashout_amount,
+            'bet_amount': bet_amount,
+            'game_type': game_type,
+            'game_mode': game_mode,
+            'game_rolls': game_rolls,
+            'emoji': emoji,
+            'target_score': target_score
+        }
+        
+        # Show cashout/roll buttons
+        keyboard = [
+            [InlineKeyboardButton(f"🎲 Roll (Your Turn)", callback_data=f"pvb_roll_{game_id}")],
+            [InlineKeyboardButton(f"💰 Cashout ${cashout_amount:.2f}", callback_data=f"pvb_cashout_{game_id}")]
+        ]
         
         await update.message.reply_text(
-            f"🤖 Bot rolled: {bot_rolls_text} = <b>{bot_total}</b>\n\n"
-            f"{user.mention_html()}, <b>Your turn!</b> Send {game_rolls} {emoji} emoji{'s' if game_rolls > 1 else ''} to respond.",
-            parse_mode=ParseMode.HTML
+            f"🤖 <b>Bot rolled:</b> {bot_rolls_text} = <b>{bot_total}</b>\n\n"
+            f"<b>What do you want to do?</b>\n\n"
+            f"💰 <b>Cashout Offer:</b> ${cashout_amount:.2f}\n"
+            f"🎲 <b>Or Roll:</b> Try to beat the bot!\n\n"
+            f"Choose your action:",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
     else:
         # User rolls first (default)
@@ -10780,8 +10995,8 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE, from
         f"  User ID: <code>{user.id}</code>\n"
         f"  Join Date: {stats.get('userinfo', {}).get('join_date', 'N/A')[:10]}\n"
         f"  Currency: {user_currency}\n\n"
-        f"🦄 <b>Level:</b> {level_data['level']} ({level_data['name']})\n"
-        f"  Rakeback Rate: {level_data['rakeback_percentage']}%\n\n"
+        f"🦄 <b>Level:</b> {level_data['name']}\n"
+        f"  Rakeback Rate: {level_data['rakeback_percentage']:.1f}%\n\n"
         f"💰 <b>Balance:</b> {formatted_balance}\n\n"
         f"🎲 <b>Betting Stats:</b>\n"
         f"  Total Bets: {total_bets}\n"
@@ -11111,7 +11326,7 @@ async def pvb_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Now call start_pvb_conversation to enter the conversation handler
         return await start_pvb_conversation_after_setup(query, context)
-
+    
     elif data.startswith("pvp_info_"):
         game_type_map = {"dice_bot": "dice", "football": "goal", "darts": "darts", "bowling": "bowl"}
         game_type = game_type_map.get(data.replace("pvp_info_", ""), "dice")
@@ -11138,6 +11353,215 @@ async def pvb_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data=f"game_{data.replace('pvp_info_', '')}")]])
         )
+
+# --- PvB Cashout Callback ---
+async def pvb_cashout_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle cashout decision in PvB game"""
+    query = update.callback_query
+    user = query.from_user
+    
+    await query.answer()
+    
+    game_id = query.data.replace("pvb_cashout_", "")
+    
+    # Get game data
+    pvb_game = context.user_data.get('pvb_game')
+    if not pvb_game or pvb_game['game_id'] != game_id:
+        await query.edit_message_text("❌ Game session expired or invalid.")
+        return
+    
+    game = game_sessions.get(game_id)
+    if not game or game['status'] != 'active':
+        await query.edit_message_text("❌ Game not found or already finished.")
+        return
+    
+    # Credit cashout amount
+    cashout_amount = pvb_game['cashout_amount']
+    user_wallets[user.id] += cashout_amount
+    
+    # Update game status
+    game['status'] = 'cashed_out'
+    game['cashout_amount'] = cashout_amount
+    profit = cashout_amount - pvb_game['bet_amount']
+    
+    # Update stats (cashout counts as a loss for stats purposes)
+    update_stats_on_bet(user.id, game_id, pvb_game['bet_amount'], False, multiplier=0, context=context)
+    update_pnl(user.id)
+    save_user_data(user.id)
+    
+    # Clean up active game tracking
+    if f"active_pvb_game_{user.id}" in context.chat_data:
+        del context.chat_data[f"active_pvb_game_{user.id}"]
+    if user.id in active_pvb_games:
+        del active_pvb_games[user.id]
+    if 'pvb_game' in context.user_data:
+        del context.user_data['pvb_game']
+    
+    # Show result with Play Again buttons
+    keyboard = [
+        [InlineKeyboardButton(f"🔄 Play Again (${pvb_game['bet_amount']:.2f})", 
+                             callback_data=f"pvb_playagain_{pvb_game['game_type']}_{pvb_game['bet_amount']}_{pvb_game['game_mode']}_{pvb_game['game_rolls']}_{pvb_game['target_score']}")],
+        [InlineKeyboardButton(f"💰 Double Bet (${pvb_game['bet_amount']*2:.2f})", 
+                             callback_data=f"pvb_double_{pvb_game['game_type']}_{pvb_game['bet_amount']*2:.2f}_{pvb_game['game_mode']}_{pvb_game['game_rolls']}_{pvb_game['target_score']}")]
+    ]
+    
+    await query.edit_message_text(
+        f"✅ <b>CASHED OUT!</b>\n\n"
+        f"🤖 <b>Bot Score:</b> {pvb_game['bot_score']}\n"
+        f"💰 <b>Cashout Amount:</b> ${cashout_amount:.2f}\n"
+        f"📊 <b>Profit:</b> ${profit:+.2f}\n\n"
+        f"💼 <b>New Balance:</b> ${user_wallets[user.id]:.2f}\n\n"
+        f"Game ID: <code>{game_id}</code>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+# --- PvB Roll Callback ---
+async def pvb_roll_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle user's decision to roll in PvB game"""
+    query = update.callback_query
+    user = query.from_user
+    
+    await query.answer()
+    
+    game_id = query.data.replace("pvb_roll_", "")
+    
+    # Get game data
+    pvb_game = context.user_data.get('pvb_game')
+    if not pvb_game or pvb_game['game_id'] != game_id:
+        await query.edit_message_text("❌ Game session expired or invalid.")
+        return
+    
+    game = game_sessions.get(game_id)
+    if not game or game['status'] != 'active':
+        await query.edit_message_text("❌ Game not found or already finished.")
+        return
+    
+    # Inform user to roll
+    emoji = pvb_game['emoji']
+    game_rolls = pvb_game['game_rolls']
+    
+    await query.edit_message_text(
+        f"🎲 <b>Your Turn!</b>\n\n"
+        f"🤖 Bot scored: <b>{pvb_game['bot_score']}</b>\n\n"
+        f"Send {game_rolls} {emoji} emoji{'s' if game_rolls > 1 else ''} to roll!",
+        parse_mode=ParseMode.HTML
+    )
+    
+    # Game will continue via dice handler when user sends emoji
+
+# --- Helper class for creating fake updates ---
+class FakeMessage:
+    """Helper class to create fake message objects for callback-initiated games"""
+    def __init__(self, text, chat, from_user, query_message):
+        self.text = text
+        self.chat = chat
+        self.from_user = from_user
+        self._query_message = query_message
+        
+    async def reply_text(self, *args, **kwargs):
+        return await self._query_message.reply_text(*args, **kwargs)
+        
+    async def reply_dice(self, *args, **kwargs):
+        return await self._query_message.reply_dice(*args, **kwargs)
+
+# --- PvB Play Again Callback ---
+async def pvb_playagain_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start a new PvB game with same parameters"""
+    query = update.callback_query
+    user = query.from_user
+    
+    await query.answer()
+    
+    # Parse callback data: pvb_playagain_{game_type}_{bet_amount}_{game_mode}_{game_rolls}_{target_score}
+    parts = query.data.split("_")
+    if len(parts) < 6:
+        await query.edit_message_text("❌ Invalid game parameters.")
+        return
+    
+    game_type = parts[2]
+    bet_amount = float(parts[3])
+    game_mode = parts[4]
+    game_rolls = int(parts[5])
+    target_score = int(parts[6])
+    
+    # Check balance
+    if user_wallets.get(user.id, 0.0) < bet_amount:
+        await query.answer("❌ Insufficient balance!", show_alert=True)
+        return
+    
+    # Set context data and start new game
+    context.user_data['bet_amount'] = bet_amount
+    context.user_data['game_mode'] = game_mode
+    context.user_data['game_rolls'] = game_rolls
+    context.user_data['game_type'] = game_type
+    context.user_data['bot_rolls_first'] = True  # Keep bot rolling first
+    
+    # Create a fake update using shared helper class
+    fake_update = Update(
+        update_id=query.message.message_id,
+        message=FakeMessage(
+            text=f"/pvb {game_type}",
+            chat=query.message.chat,
+            from_user=user,
+            query_message=query.message
+        )
+    )
+    fake_update.effective_user = user
+    fake_update.effective_chat = query.message.chat
+    fake_update.message.chat = query.message.chat
+    
+    await query.edit_message_text("🔄 Starting new game...")
+    await play_vs_bot_game(fake_update, context, game_type, target_score)
+
+# --- PvB Double Bet Callback ---
+async def pvb_double_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start a new PvB game with doubled bet"""
+    query = update.callback_query
+    user = query.from_user
+    
+    await query.answer()
+    
+    # Parse callback data: pvb_double_{game_type}_{bet_amount}_{game_mode}_{game_rolls}_{target_score}
+    parts = query.data.split("_")
+    if len(parts) < 6:
+        await query.edit_message_text("❌ Invalid game parameters.")
+        return
+    
+    game_type = parts[2]
+    bet_amount = float(parts[3])
+    game_mode = parts[4]
+    game_rolls = int(parts[5])
+    target_score = int(parts[6])
+    
+    # Check balance
+    if user_wallets.get(user.id, 0.0) < bet_amount:
+        await query.answer("❌ Insufficient balance!", show_alert=True)
+        return
+    
+    # Set context data and start new game
+    context.user_data['bet_amount'] = bet_amount
+    context.user_data['game_mode'] = game_mode
+    context.user_data['game_rolls'] = game_rolls
+    context.user_data['game_type'] = game_type
+    context.user_data['bot_rolls_first'] = True  # Keep bot rolling first
+    
+    # Create a fake update using shared helper class
+    fake_update = Update(
+        update_id=query.message.message_id,
+        message=FakeMessage(
+            text=f"/pvb {game_type}",
+            chat=query.message.chat,
+            from_user=user,
+            query_message=query.message
+        )
+    )
+    fake_update.effective_user = user
+    fake_update.effective_chat = query.message.chat
+    fake_update.message.chat = query.message.chat
+    
+    await query.edit_message_text("💰 Starting game with doubled bet...")
+    await play_vs_bot_game(fake_update, context, game_type, target_score)
 
 async def start_pvb_conversation_after_setup(query, context):
     """Helper function to enter the PvB conversation after mode and roll setup"""
@@ -11669,21 +12093,76 @@ async def message_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 user_wallets[user.id] += winnings
                 game['status'] = 'completed'
                 game['win'] = True
+                profit = winnings - game["bet_amount"]
                 update_stats_on_bet(user.id, game['id'], game['bet_amount'], True, context=context)
+                update_pnl(user.id)
+                save_user_data(user.id)
+                
+                # New result screen with Play Again buttons
+                game_type_display = game_type.replace("_", " ").capitalize()
+                keyboard = [
+                    [InlineKeyboardButton(f"🔄 Play Again (${game['bet_amount']:.2f})", 
+                                         callback_data=f"pvb_playagain_{game_type}_{game['bet_amount']}_{game_mode}_{game_rolls}_{game['target_score']}")],
+                    [InlineKeyboardButton(f"💰 Double Bet (${game['bet_amount']*2:.2f})", 
+                                         callback_data=f"pvb_double_{game_type}_{game['bet_amount']*2:.2f}_{game_mode}_{game_rolls}_{game['target_score']}")]
+                ]
+                
                 await asyncio.sleep(0.5)  # Rate limit protection
-                await update.message.reply_text(f"🏆 {user.mention_html()}, Congratulations! You beat the bot ({game['user_score']}-{game['bot_score']}) and win ${winnings:.2f}!", parse_mode=ParseMode.HTML)
+                await update.message.reply_text(
+                    f"🎰 <b>GAME OVER: {game_type_display}</b>\n\n"
+                    f"🤖 <b>Bot Score:</b> {game['bot_score']}\n"
+                    f"👤 <b>Your Score:</b> {game['user_score']}\n\n"
+                    f"📊 <b>Result:</b> 🏆 WIN\n"
+                    f"💰 <b>Profit:</b> ${profit:+.2f}\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"💼 <b>Wallet:</b> ${user_wallets[user.id]:.2f}\n\n"
+                    f"Game ID: <code>{game['id']}</code>",
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+                
                 del context.chat_data[f"active_pvb_game_{user.id}"]
                 if user.id in active_pvb_games:
                     del active_pvb_games[user.id]
+                if 'pvb_game' in context.user_data:
+                    del context.user_data['pvb_game']
+                    
             elif game["bot_score"] >= game["target_score"]:
                 game['status'] = 'completed'
                 game['win'] = False
+                loss = game["bet_amount"]
                 update_stats_on_bet(user.id, game['id'], game['bet_amount'], False, context=context)
+                update_pnl(user.id)
+                save_user_data(user.id)
+                
+                # New result screen with Play Again buttons
+                game_type_display = game_type.replace("_", " ").capitalize()
+                keyboard = [
+                    [InlineKeyboardButton(f"🔄 Play Again (${game['bet_amount']:.2f})", 
+                                         callback_data=f"pvb_playagain_{game_type}_{game['bet_amount']}_{game_mode}_{game_rolls}_{game['target_score']}")],
+                    [InlineKeyboardButton(f"💰 Double Bet (${game['bet_amount']*2:.2f})", 
+                                         callback_data=f"pvb_double_{game_type}_{game['bet_amount']*2:.2f}_{game_mode}_{game_rolls}_{game['target_score']}")]
+                ]
+                
                 await asyncio.sleep(0.5)  # Rate limit protection
-                await update.message.reply_text(f"😔 {user.mention_html()}, Bot wins the match ({game['bot_score']}-{game['user_score']}). You lost ${game['bet_amount']:.2f}.", parse_mode=ParseMode.HTML)
+                await update.message.reply_text(
+                    f"🎰 <b>GAME OVER: {game_type_display}</b>\n\n"
+                    f"🤖 <b>Bot Score:</b> {game['bot_score']}\n"
+                    f"👤 <b>Your Score:</b> {game['user_score']}\n\n"
+                    f"📊 <b>Result:</b> ❌ LOSS\n"
+                    f"💰 <b>Profit:</b> -${loss:.2f}\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"💼 <b>Wallet:</b> ${user_wallets[user.id]:.2f}\n\n"
+                    f"Game ID: <code>{game['id']}</code>",
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+                
                 del context.chat_data[f"active_pvb_game_{user.id}"]
                 if user.id in active_pvb_games:
                     del active_pvb_games[user.id]
+                if 'pvb_game' in context.user_data:
+                    del context.user_data['pvb_game']
             else: # Continue game - next round
                 await asyncio.sleep(0.5)  # Rate limit protection
                 
@@ -11724,10 +12203,37 @@ async def message_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     bot_total = sum(bot_rolls)
                     bot_rolls_text = " + ".join(str(r) for r in bot_rolls)
                     
+                    # Calculate cashout offer for this round
+                    cashout_amount = calculate_cashout(bot_total, game['bet_amount'], game_type, game_mode, game_rolls)
+                    
+                    # Store game state in context for callbacks
+                    context.user_data['pvb_game'] = {
+                        'game_id': game['id'],
+                        'bot_score': bot_total,
+                        'cashout_amount': cashout_amount,
+                        'bet_amount': game['bet_amount'],
+                        'game_type': game_type,
+                        'game_mode': game_mode,
+                        'game_rolls': game_rolls,
+                        'emoji': expected_emoji,
+                        'target_score': game['target_score']
+                    }
+                    
+                    # Show cashout/roll buttons
+                    keyboard = [
+                        [InlineKeyboardButton(f"🎲 Roll (Your Turn)", callback_data=f"pvb_roll_{game['id']}")],
+                        [InlineKeyboardButton(f"💰 Cashout ${cashout_amount:.2f}", callback_data=f"pvb_cashout_{game['id']}")]
+                    ]
+                    
                     await update.message.reply_text(
-                        f"🤖 Bot rolled: {bot_rolls_text} = <b>{bot_total}</b>\n\n"
-                        f"<b>Your turn!</b> Send {game_rolls} {expected_emoji}!",
-                        parse_mode=ParseMode.HTML
+                        f"Score: You {game['user_score']} - {game['bot_score']} Bot. (First to {game['target_score']})\n\n"
+                        f"🤖 <b>Bot rolled:</b> {bot_rolls_text} = <b>{bot_total}</b>\n\n"
+                        f"<b>What do you want to do?</b>\n\n"
+                        f"💰 <b>Cashout Offer:</b> ${cashout_amount:.2f}\n"
+                        f"🎲 <b>Or Roll:</b> Try to beat the bot!\n\n"
+                        f"Choose your action:",
+                        parse_mode=ParseMode.HTML,
+                        reply_markup=InlineKeyboardMarkup(keyboard)
                     )
                 else:
                     # User rolls first for next round
@@ -13361,33 +13867,44 @@ async def level_command(update: Update, context: ContextTypes.DEFAULT_TYPE, from
     user = update.effective_user
     await ensure_user_in_wallets(user.id, user.username, context=context)
     
-    current_level_data = get_user_level(user.id)
-    wagered = user_stats[user.id].get("bets", {}).get("amount", 0.0)
+    total_wager = _get_total_wager(user.id)
+    current_level, next_level = _current_and_next_level(total_wager)
     
-    text = f"🦄 <b>Your Level: {current_level_data['level']} ({current_level_data['name']})</b>\n\n"
+    current_name, current_threshold, current_bonus = current_level
+    
+    # Determine user's current tier for "View All Levels" button
+    user_tier = "Bronze"  # Default
+    if current_name != "None":
+        for tier in LEVEL_ORDER:
+            for level_name, _, _ in LEVELS_DATA[tier]:
+                if level_name == current_name:
+                    user_tier = tier
+                    break
+    
+    text = f"🦄 <b>Your Current Level: {current_name}</b>\n\n"
+    text += f"💰 <b>Total Wagered:</b> ${total_wager:,.2f}\n\n"
     
     # Check if user is at max level
-    if current_level_data['level'] == LEVELS[-1]['level']:
+    if next_level is None:
         text += "🏆 You have reached the maximum level!\n"
-        text += f"💰 Total Wagered: ${wagered:,.2f}"
+        text += f"Congratulations on reaching {current_name}!"
     else:
-        next_level_data = LEVELS[current_level_data['level'] + 1]
-        wager_needed_for_next = next_level_data['wager_required']
-        wager_of_current = current_level_data['wager_required']
+        next_name, next_threshold, next_bonus = next_level
         
-        progress = wagered - wager_of_current
-        total_for_level = wager_needed_for_next - wager_of_current
+        # Progress calculation
+        progress = total_wager - current_threshold
+        total_for_level = next_threshold - current_threshold
         
-        progress_bar = create_progress_bar(progress, total_for_level)
-        percentage = (progress / total_for_level) * 100
+        progress_bar_visual = _progress_bar(progress, total_for_level, length=10)
         
-        text += f"<b>Progress to Level {next_level_data['level']} ({next_level_data['name']}):</b>\n"
-        text += f"`{progress_bar}` ({percentage:.1f}%)\n\n"
-        text += f"💰 <b>Wagered:</b> ${wagered:,.2f} / ${wager_needed_for_next:,.2f}\n"
-        text += f"💸 <b>Rakeback:</b> {current_level_data['rakeback_percentage']}%"
+        wager_needed = next_threshold - total_wager
+        
+        text += f"<b>Progress to {next_name}:</b>\n"
+        text += f"`{progress_bar_visual}`\n\n"
+        text += f"💸 <b>Wager needed:</b> ${wager_needed:,.2f}\n"
 
     keyboard = [
-        [InlineKeyboardButton("📜 View All Levels", callback_data="level_all")],
+        [InlineKeyboardButton("📜 View All Levels", callback_data=f"levels_{user_tier}")],
         [InlineKeyboardButton("🔙 Back to More", callback_data="main_more")]
     ]
     
@@ -13400,20 +13917,42 @@ async def level_command(update: Update, context: ContextTypes.DEFAULT_TYPE, from
 
 @check_banned
 @check_maintenance
-async def level_all_command(update: Update, context: ContextTypes.DEFAULT_TYPE, from_callback=False):
+async def level_all_command(update: Update, context: ContextTypes.DEFAULT_TYPE, from_callback=False, tier="Bronze"):
+    """Display all levels for a specific tier with pagination"""
     # Handle both command and callback query
     if update.callback_query:
         from_callback = True
-        
-    text = "🦄 <b>All Available Levels</b> 🦄\n\n"
-    for level in LEVELS:
-        text += (f"<b>Level {level['level']} ({level['name']})</b>\n"
-                 f"  - Wager Required: ${level['wager_required']:,}\n"
-                 f"  - One-time Reward: ${level['reward']:,}\n"
-                 f"  - Rakeback Rate: {level['rakeback_percentage']}%\n"
-                 "--------------------\n")
-                 
-    keyboard = [[InlineKeyboardButton("🔙 Back to My Level", callback_data="main_level")]]
+    
+    # Get the tier levels
+    tier_levels = LEVELS_DATA.get(tier, LEVELS_DATA["Bronze"])
+    
+    text = f"🦄 <b>{tier} Tier Levels</b> 🦄\n\n"
+    
+    for level_name, wager_req, bonus in tier_levels:
+        text += (f"<b>{level_name}</b>\n"
+                 f"  💰 Wager Required: ${wager_req:,}\n"
+                 f"  🎁 Bonus: ${bonus:,.1f}\n"
+                 "━━━━━━━━━━━━━━━━━━\n")
+    
+    # Build navigation keyboard
+    keyboard = []
+    nav_row = []
+    
+    # Previous tier button
+    if LEVEL_NAVIGATION[tier]["prev"]:
+        prev_tier = LEVEL_NAVIGATION[tier]["prev"]
+        nav_row.append(InlineKeyboardButton(f"⬅️ {prev_tier}", callback_data=f"levels_{prev_tier}"))
+    
+    # Next tier button
+    if LEVEL_NAVIGATION[tier]["next"]:
+        next_tier = LEVEL_NAVIGATION[tier]["next"]
+        nav_row.append(InlineKeyboardButton(f"{next_tier} ➡️", callback_data=f"levels_{next_tier}"))
+    
+    if nav_row:
+        keyboard.append(nav_row)
+    
+    # Back button
+    keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="main_level")])
     
     if from_callback:
         await update.callback_query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(keyboard))
@@ -13424,6 +13963,24 @@ async def level_all_command(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         # Set ownership after sending
         if update.effective_user:
             set_menu_owner(sent_message, update.effective_user.id)
+
+async def levels_tier_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle tier navigation callbacks"""
+    query = update.callback_query
+    user = query.from_user
+    
+    # Check menu ownership
+    if not check_menu_ownership(query, context):
+        await query.answer("This menu is not for you.", show_alert=True)
+        return
+    
+    await query.answer()
+    
+    # Extract tier from callback data (e.g., "levels_Bronze" -> "Bronze")
+    tier = query.data.split("_", 1)[1]
+    
+    # Call level_all_command with the tier
+    await level_all_command(update, context, from_callback=True, tier=tier)
 
 async def user_info_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -15688,6 +16245,7 @@ def main():
     app.add_handler(CallbackQueryHandler(xdxw_playbot_callback, pattern=r"^xdxw_playbot_")) # NEW - XdX'w play with bot
     app.add_handler(CallbackQueryHandler(xdxw_bot_first_callback, pattern=r"^xdxw_bot_first_")) # NEW - XdX'w bot rolls first
     app.add_handler(CallbackQueryHandler(level_all_command, pattern=r"^level_all$")) # NEW
+    app.add_handler(CallbackQueryHandler(levels_tier_callback, pattern=r"^levels_[A-Z]")) # NEW - Level tier pagination (more specific pattern)
     app.add_handler(CallbackQueryHandler(price_update_callback, pattern=r"^price_update_")) # NEW
     app.add_handler(CallbackQueryHandler(game_info_callback, pattern=r"^game_")); app.add_handler(CallbackQueryHandler(blackjack_callback, pattern=r"^bj_"))
     app.add_handler(CallbackQueryHandler(coin_flip_callback, pattern=r"^flip_")); app.add_handler(CallbackQueryHandler(tower_callback, pattern=r"^tower_"))
@@ -15698,6 +16256,10 @@ def main():
     app.add_handler(CallbackQueryHandler(clear_confirm_callback, pattern=r"^(clear|clearall)_confirm_"))
     app.add_handler(CallbackQueryHandler(match_invite_callback, pattern=r"^(accept_|decline_)")); app.add_handler(CallbackQueryHandler(mines_pick_callback, pattern=r"^mines_"))
     app.add_handler(CallbackQueryHandler(stop_confirm_callback, pattern=r"^stop_confirm_")); app.add_handler(CallbackQueryHandler(pvb_menu_callback, pattern="^pvp_info_"))
+    app.add_handler(CallbackQueryHandler(pvb_cashout_callback, pattern=r"^pvb_cashout_"))  # NEW - PvB cashout
+    app.add_handler(CallbackQueryHandler(pvb_roll_callback, pattern=r"^pvb_roll_"))  # NEW - PvB roll
+    app.add_handler(CallbackQueryHandler(pvb_playagain_callback, pattern=r"^pvb_playagain_"))  # NEW - PvB play again
+    app.add_handler(CallbackQueryHandler(pvb_double_callback, pattern=r"^pvb_double_"))  # NEW - PvB double bet
     app.add_handler(CallbackQueryHandler(escrow_callback_handler, pattern=r"^escrow_")); app.add_handler(CallbackQueryHandler(users_navigation_callback, pattern=r"^users_"))
     app.add_handler(CallbackQueryHandler(language_callback, pattern=r"^lang_"))
     app.add_handler(CallbackQueryHandler(currency_callback, pattern=r"^setcurrency_")) # NEW - Currency setting
