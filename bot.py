@@ -546,21 +546,95 @@ ACHIEVEMENTS = {
     "referral_master": {"name": "🤝 Connector", "description": "Refer 5 active users.", "emoji": "🤝", "type": "referrals", "value": 5},
 }
 ## NEW FEATURE - Level System ##
-LEVELS = [
-    {"level": 0, "name": "None", "wager_required": 0, "reward": 0, "rakeback_percentage": 0.01},
-    {"level": 1, "name": "Bronze", "wager_required": 10000, "reward": 15, "rakeback_percentage": 0.03},
-    {"level": 2, "name": "Silver", "wager_required": 50000, "reward": 30, "rakeback_percentage": 0.04},
-    {"level": 3, "name": "Gold", "wager_required": 100000, "reward": 60, "rakeback_percentage": 0.06},
-    {"level": 4, "name": "Platinum I", "wager_required": 250000, "reward": 100, "rakeback_percentage": 0.07},
-    {"level": 5, "name": "Platinum II", "wager_required": 500000, "reward": 200, "rakeback_percentage": 0.08},
-    {"level": 6, "name": "Platinum III", "wager_required": 1000000, "reward": 400, "rakeback_percentage": 0.09},
-    {"level": 7, "name": "Platinum IV", "wager_required": 2500000, "reward": 800, "rakeback_percentage": 0.09},
-    {"level": 8, "name": "Platinum V", "wager_required": 5000000, "reward": 1600, "rakeback_percentage": 0.10},
-    {"level": 9, "name": "Platinum VI", "wager_required": 10000000, "reward": 3200, "rakeback_percentage": 0.10},
-    {"level": 10, "name": "Diamond I", "wager_required": 25000000, "reward": 6400, "rakeback_percentage": 0.11},
-    {"level": 11, "name": "Diamond II", "wager_required": 50000000, "reward": 25600, "rakeback_percentage": 0.11},
-    {"level": 12, "name": "Diamond III", "wager_required": 100000000, "reward": 51200, "rakeback_percentage": 0.12},
+# --- NEW LEVEL CONFIGURATION ---
+
+LEVEL_ORDER = [
+    "Bronze", "Silver", "Gold", "Platinum", "Diamond", 
+    "Emerald", "Ruby", "Sapphire"
 ]
+
+LEVELS_DATA = {
+    "Bronze": [
+        ("Bronze I", 100, 1), ("Bronze II", 500, 2), ("Bronze III", 1000, 2.5),
+        ("Bronze IV", 2500, 7.5), ("Bronze V", 5000, 12.5),
+    ],
+    "Silver": [
+        ("Silver I", 10000, 25), ("Silver II", 15200, 26), ("Silver III", 20500, 26.5),
+        ("Silver IV", 26000, 27.5), ("Silver V", 32000, 30),
+    ],
+    "Gold": [
+        ("Gold I", 39000, 35), ("Gold II", 48000, 45), ("Gold III", 58000, 50),
+        ("Gold IV", 69000, 55), ("Gold V", 81000, 60),
+    ],
+    "Platinum": [
+        ("Platinum I", 94000, 65), ("Platinum II", 107500, 67.5), ("Platinum III", 122000, 72.5),
+        ("Platinum IV", 138000, 80), ("Platinum V", 155000, 85),
+    ],
+    "Diamond": [
+        ("Diamond I", 173000, 90), ("Diamond II", 192000, 95), ("Diamond III", 211500, 97.5),
+        ("Diamond IV", 232000, 102), ("Diamond V", 253000, 105),
+    ],
+    "Emerald": [
+        ("Emerald I", 275000, 110), ("Emerald II", 298000, 115), ("Emerald III", 322000, 120),
+        ("Emerald IV", 347000, 125), ("Emerald V", 373000, 130),
+    ],
+    "Ruby": [
+        ("Ruby I", 400000, 135), ("Ruby II", 428000, 140), ("Ruby III", 457000, 145),
+        ("Ruby IV", 487000, 150), ("Ruby V", 518000, 155),
+    ],
+    "Sapphire": [
+        ("Sapphire I", 550000, 160), ("Sapphire II", 583000, 165), ("Sapphire III", 617000, 170),
+        ("Sapphire IV", 652000, 175), ("Sapphire V", 688000, 180),
+    ]
+}
+
+# Pre-calculate navigation map for the pagination buttons
+LEVEL_NAVIGATION = {}
+for i, tier in enumerate(LEVEL_ORDER):
+    prev_t = LEVEL_ORDER[i-1] if i > 0 else None
+    next_t = LEVEL_ORDER[i+1] if i < len(LEVEL_ORDER)-1 else None
+    LEVEL_NAVIGATION[tier] = {"prev": prev_t, "next": next_t}
+
+def _flatten_levels():
+    """Return [(level_name, threshold_wager, bonus), ...] in progression order."""
+    flat = []
+    for tier in LEVEL_ORDER:
+        for name, wager, bonus in LEVELS_DATA[tier]:
+            flat.append((name, wager, bonus))
+    return flat
+
+ALL_LEVELS = _flatten_levels()
+
+# --- LEVEL HELPER FUNCTIONS ---
+
+def _get_total_wager(user_id: int) -> float:
+    """Get total wager from user_stats (JSON) instead of SQL."""
+    if user_id not in user_stats:
+        return 0.0
+    return user_stats[user_id].get("bets", {}).get("amount", 0.0)
+
+def _current_and_next_level(total_wager: float):
+    """Find current level by highest threshold <= total_wager."""
+    curr_idx = -1
+    for i, (name, threshold, bonus) in enumerate(ALL_LEVELS):
+        if total_wager >= threshold:
+            curr_idx = i
+        else:
+            break
+    
+    current = ALL_LEVELS[curr_idx] if curr_idx >= 0 else ("None", 0, 0)
+    # Next level is the one immediately after curr_idx
+    next_idx = curr_idx + 1
+    next_level = ALL_LEVELS[next_idx] if next_idx < len(ALL_LEVELS) else None
+    return current, next_level
+
+def _progress_bar(current, target, length=10):
+    """Generate a visual progress bar."""
+    if target == 0: return "▬" * length
+    pct = min(1.0, current / target)
+    fill = int(pct * length)
+    return "🔘" * fill + "▬" * (length - fill)
+
 ## NEW FEATURE - Language Support ##
 # Comprehensive language system with 6 supported languages loaded from text files
 def get_user_lang(user_id):
@@ -4293,45 +4367,46 @@ async def check_and_award_achievements(user_id, context, multiplier=0):
                     logging.warning(f"Could not send achievement notification to user {user_id}")
 ## NEW FEATURE - Level System Logic ##
 def get_user_level(user_id: int):
-    """Determines a user's current level based on their total wagered amount."""
+    """Determines a user's current level based on their total wagered amount using the new level system."""
     if user_id not in user_stats:
-        return LEVELS[0]
+        return ("None", 0, 0)
     
-    wagered = user_stats[user_id].get("bets", {}).get("amount", 0.0)
-    current_level = LEVELS[0]
-    for level_data in reversed(LEVELS):
-        if wagered >= level_data["wager_required"]:
-            current_level = level_data
-            break
-    return current_level
+    total_wager = _get_total_wager(user_id)
+    current, _ = _current_and_next_level(total_wager)
+    return current
 
 async def check_and_award_level_up(user_id: int, context: ContextTypes.DEFAULT_TYPE):
-    """Checks for level-up, awards reward, and notifies the user."""
+    """Checks for level-up, awards reward, and notifies the user with new level system."""
     if user_id not in user_stats:
         return
 
-    current_level_data = get_user_level(user_id)
-    level_num = current_level_data["level"]
-    
+    total_wager = _get_total_wager(user_id)
     claimed_rewards = user_stats[user_id].get("claimed_level_rewards", [])
+    
+    # Convert old integer-based claims to string-based if necessary
+    if claimed_rewards and isinstance(claimed_rewards[0], int):
+        user_stats[user_id]["claimed_level_rewards"] = []
+        claimed_rewards = []
 
-    if level_num > 0 and level_num not in claimed_rewards:
-        reward_amount = current_level_data["reward"]
-        user_wallets[user_id] += reward_amount
-        user_stats[user_id].setdefault("claimed_level_rewards", []).append(level_num)
-        save_user_data(user_id)
-        
-        # Notify the user
-        try:
-            await context.bot.send_message(
-                chat_id=user_id,
-                text=(f"🎉 <b>Level Up!</b> 🎉\n\n"
-                      f"Congratulations! You have reached <b>Level {level_num} ({current_level_data['name']})</b>.\n"
-                      f"You have been awarded a one-time bonus of <b>${reward_amount:.2f}</b>!"),
-                parse_mode=ParseMode.HTML
-            )
-        except (BadRequest, Forbidden):
-            logging.warning(f"Could not send level-up notification to user {user_id}")
+    # Check all levels for any unclaimed rewards
+    for level_name, threshold, bonus in ALL_LEVELS:
+        if total_wager >= threshold and level_name not in claimed_rewards:
+            # Award this level
+            user_wallets[user_id] += bonus
+            user_stats[user_id].setdefault("claimed_level_rewards", []).append(level_name)
+            save_user_data(user_id)
+            
+            # Notify the user
+            try:
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=(f"🎉 <b>Level Up!</b> 🎉\n\n"
+                          f"Congratulations! You have reached <b>{level_name}</b>.\n"
+                          f"You have been awarded a one-time bonus of <b>${bonus:.2f}</b>!"),
+                    parse_mode=ParseMode.HTML
+                )
+            except (BadRequest, Forbidden):
+                logging.warning(f"Could not send level-up notification to user {user_id}")
 
 async def process_referral_commission(user_id, amount, commission_type):
     if user_id not in user_stats or not user_stats[user_id].get('referral', {}).get('referrer_id'):
@@ -7766,15 +7841,32 @@ async def handle_tower_pick(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         keyboard = keyboard_markup.inline_keyboard
         keyboard.append([await create_provably_fair_button(game_id, context)])
         
-        await query.edit_message_text(
-            f"🐍 <b>Tower Collapsed!</b>\n"
-            f"ID: <code>{game_id}</code>\n\n"
-            f"💔 You hit the snake on Floor {current_floor + 1}!\n"
-            f"💸 Lost: ${game['bet_amount']:.2f}\n"
-            f"🏗️ Floors climbed: {current_floor}/9",
-            parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+        try:
+            await query.edit_message_text(
+                f"🐍 <b>Tower Collapsed!</b>\n"
+                f"ID: <code>{game_id}</code>\n\n"
+                f"💔 You hit the snake on Floor {current_floor + 1}!\n"
+                f"💸 Lost: ${game['bet_amount']:.2f}\n"
+                f"🏗️ Floors climbed: {current_floor}/9",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        except Exception as e:
+            logging.error(f"Error updating tower message on snake hit: {e}")
+            # Try sending as new message if edit fails
+            try:
+                await context.bot.send_message(
+                    chat_id=user.id,
+                    text=f"🐍 <b>Tower Collapsed!</b>\n"
+                         f"ID: <code>{game_id}</code>\n\n"
+                         f"💔 You hit the snake on Floor {current_floor + 1}!\n"
+                         f"💸 Lost: ${game['bet_amount']:.2f}\n"
+                         f"🏗️ Floors climbed: {current_floor}/9",
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+            except Exception as e2:
+                logging.error(f"Error sending tower snake message: {e2}")
         return
     
     # Safe tile - advance to next floor
@@ -7874,15 +7966,33 @@ async def handle_tower_cashout(update: Update, context: ContextTypes.DEFAULT_TYP
     keyboard = keyboard_markup.inline_keyboard
     keyboard.append([await create_provably_fair_button(game_id, context)])
     
-    await query.edit_message_text(
-        f"💸 <b>Cashed Out!</b>\n"
-        f"ID: <code>{game_id}</code>\n\n"
-        f"🎉 Winnings: <b>${winnings:.2f}</b>\n"
-        f"📈 Multiplier: {multiplier}x\n"
-        f"🏗️ Floors climbed: {current_floor}/9",
-        parse_mode=ParseMode.HTML,
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    try:
+        await query.edit_message_text(
+            f"💸 <b>Cashed Out!</b>\n"
+            f"ID: <code>{game_id}</code>\n\n"
+            f"🎉 Winnings: <b>${winnings:.2f}</b>\n"
+            f"📈 Multiplier: {multiplier}x\n"
+            f"🏗️ Floors climbed: {current_floor}/9",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    except Exception as e:
+        logging.error(f"Error updating tower message on cashout: {e}")
+        # Try sending as new message if edit fails
+        try:
+            await context.bot.send_message(
+                chat_id=user.id,
+                text=f"💸 <b>Cashed Out!</b>\n"
+                     f"ID: <code>{game_id}</code>\n\n"
+                     f"🎉 Winnings: <b>${winnings:.2f}</b>\n"
+                     f"📈 Multiplier: {multiplier}x\n"
+                     f"🏗️ Floors climbed: {current_floor}/9",
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        except Exception as e2:
+            logging.error(f"Error sending tower cashout message: {e2}")
+    return
 
 
 def create_revealed_floor_keyboard(game_id: str, floor: int, tiles_per_floor: int, snake_pos: int, selected_pos: int):
@@ -11156,13 +11266,26 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_currency = get_user_currency(user.id)
     formatted_balance = format_balance_with_locked(user.id, user_currency)
     
-    keyboard = [
-        [
-            InlineKeyboardButton("💰 Deposit", callback_data="main_deposit"),
-            InlineKeyboardButton("💸 Withdraw", callback_data="main_withdraw")
-        ],
-        [InlineKeyboardButton("💼 View Full Wallet", callback_data="main_wallet")]
-    ]
+    # Check if in group chat
+    is_group = update.effective_chat.type in ['group', 'supergroup']
+    
+    if is_group:
+        # In group chats, only show Deposit and Withdraw buttons
+        keyboard = [
+            [
+                InlineKeyboardButton("💰 Deposit", callback_data="main_deposit"),
+                InlineKeyboardButton("💸 Withdraw", callback_data="main_withdraw")
+            ]
+        ]
+    else:
+        # In private chats, show all buttons
+        keyboard = [
+            [
+                InlineKeyboardButton("💰 Deposit", callback_data="main_deposit"),
+                InlineKeyboardButton("💸 Withdraw", callback_data="main_withdraw")
+            ],
+            [InlineKeyboardButton("💼 View Full Wallet", callback_data="main_wallet")]
+        ]
     
     text = f"💰 <b>Your Balance</b>\n\n{formatted_balance}"
     
@@ -13358,36 +13481,35 @@ def create_progress_bar(progress, total, length=10):
 @check_banned
 @check_maintenance
 async def level_command(update: Update, context: ContextTypes.DEFAULT_TYPE, from_callback=False):
+    """Show user's current level status with new level system."""
     user = update.effective_user
     await ensure_user_in_wallets(user.id, user.username, context=context)
     
-    current_level_data = get_user_level(user.id)
-    wagered = user_stats[user.id].get("bets", {}).get("amount", 0.0)
+    total_wager = _get_total_wager(user.id)
+    current, next_level = _current_and_next_level(total_wager)
+    current_name, current_threshold, current_bonus = current
     
-    text = f"🦄 <b>Your Level: {current_level_data['level']} ({current_level_data['name']})</b>\n\n"
+    text = f"🦄 <b>Your Level Status</b>\n\n"
+    text += f"📊 <b>Current Level:</b> {current_name}\n"
+    text += f"💰 <b>Current Wager:</b> ${total_wager:,.2f}\n\n"
     
-    # Check if user is at max level
-    if current_level_data['level'] == LEVELS[-1]['level']:
-        text += "🏆 You have reached the maximum level!\n"
-        text += f"💰 Total Wagered: ${wagered:,.2f}"
+    if next_level:
+        next_name, next_threshold, next_bonus = next_level
+        wager_needed = next_threshold - total_wager
+        progress = total_wager - current_threshold
+        total_for_level = next_threshold - current_threshold
+        
+        progress_bar = _progress_bar(progress, total_for_level, length=10)
+        percentage = (progress / total_for_level * 100) if total_for_level > 0 else 0
+        
+        text += f"<b>Next Level:</b> {next_name}\n"
+        text += f"<code>{progress_bar}</code> {percentage:.1f}%\n\n"
+        text += f"💸 <b>Wager needed:</b> ${wager_needed:,.2f}\n"
     else:
-        next_level_data = LEVELS[current_level_data['level'] + 1]
-        wager_needed_for_next = next_level_data['wager_required']
-        wager_of_current = current_level_data['wager_required']
-        
-        progress = wagered - wager_of_current
-        total_for_level = wager_needed_for_next - wager_of_current
-        
-        progress_bar = create_progress_bar(progress, total_for_level)
-        percentage = (progress / total_for_level) * 100
-        
-        text += f"<b>Progress to Level {next_level_data['level']} ({next_level_data['name']}):</b>\n"
-        text += f"`{progress_bar}` ({percentage:.1f}%)\n\n"
-        text += f"💰 <b>Wagered:</b> ${wagered:,.2f} / ${wager_needed_for_next:,.2f}\n"
-        text += f"💸 <b>Rakeback:</b> {current_level_data['rakeback_percentage']}%"
-
+        text += "🏆 <b>You have reached the maximum level!</b>\n"
+    
     keyboard = [
-        [InlineKeyboardButton("📜 View All Levels", callback_data="level_all")],
+        [InlineKeyboardButton("📜 View All Levels", callback_data="levels_Bronze")],
         [InlineKeyboardButton("🔙 Back to More", callback_data="main_more")]
     ]
     
@@ -13395,35 +13517,64 @@ async def level_command(update: Update, context: ContextTypes.DEFAULT_TYPE, from
         await safe_edit_message(update.callback_query, text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(keyboard))
     else:
         sent_message = await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(keyboard))
-        # Set ownership after sending
         set_menu_owner(sent_message, user.id)
 
 @check_banned
 @check_maintenance
-async def level_all_command(update: Update, context: ContextTypes.DEFAULT_TYPE, from_callback=False):
+async def level_all_command(update: Update, context: ContextTypes.DEFAULT_TYPE, from_callback=False, tier="Bronze"):
+    """Show all levels for a specific tier with pagination."""
     # Handle both command and callback query
     if update.callback_query:
         from_callback = True
-        
-    text = "🦄 <b>All Available Levels</b> 🦄\n\n"
-    for level in LEVELS:
-        text += (f"<b>Level {level['level']} ({level['name']})</b>\n"
-                 f"  - Wager Required: ${level['wager_required']:,}\n"
-                 f"  - One-time Reward: ${level['reward']:,}\n"
-                 f"  - Rakeback Rate: {level['rakeback_percentage']}%\n"
-                 "--------------------\n")
-                 
-    keyboard = [[InlineKeyboardButton("🔙 Back to My Level", callback_data="main_level")]]
+    
+    # Get the tier levels
+    if tier not in LEVELS_DATA:
+        tier = "Bronze"
+    
+    tier_levels = LEVELS_DATA[tier]
+    
+    text = f"🦄 <b>{tier} Tier Levels</b> 🦄\n\n"
+    for level_name, wager_req, bonus in tier_levels:
+        text += (f"<b>{level_name}</b>\n"
+                 f"  💰 Wager: ${wager_req:,}\n"
+                 f"  🎁 Bonus: ${bonus:,.2f}\n"
+                 "──────────────\n")
+    
+    # Build navigation buttons
+    keyboard = []
+    nav_row = []
+    
+    nav = LEVEL_NAVIGATION[tier]
+    if nav["prev"]:
+        nav_row.append(InlineKeyboardButton(f"⬅️ {nav['prev']}", callback_data=f"levels_{nav['prev']}"))
+    if nav["next"]:
+        nav_row.append(InlineKeyboardButton(f"{nav['next']} ➡️", callback_data=f"levels_{nav['next']}"))
+    
+    if nav_row:
+        keyboard.append(nav_row)
+    
+    keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="main_level")])
     
     if from_callback:
         await update.callback_query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(keyboard))
-        # Set ownership after editing
         set_menu_owner(update.callback_query.message, update.callback_query.from_user.id)
     else:
         sent_message = await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(keyboard))
-        # Set ownership after sending
         if update.effective_user:
             set_menu_owner(sent_message, update.effective_user.id)
+
+async def levels_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle levels pagination callbacks."""
+    query = update.callback_query
+    await query.answer()
+    
+    # Extract tier from callback data (e.g., "levels_Bronze" -> "Bronze")
+    tier = query.data.replace("levels_", "")
+    
+    if tier not in LEVELS_DATA:
+        tier = "Bronze"
+    
+    await level_all_command(update, context, from_callback=True, tier=tier)
 
 async def user_info_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -15688,6 +15839,7 @@ def main():
     app.add_handler(CallbackQueryHandler(xdxw_playbot_callback, pattern=r"^xdxw_playbot_")) # NEW - XdX'w play with bot
     app.add_handler(CallbackQueryHandler(xdxw_bot_first_callback, pattern=r"^xdxw_bot_first_")) # NEW - XdX'w bot rolls first
     app.add_handler(CallbackQueryHandler(level_all_command, pattern=r"^level_all$")) # NEW
+    app.add_handler(CallbackQueryHandler(levels_callback, pattern=r"^levels_")) # NEW - Levels pagination
     app.add_handler(CallbackQueryHandler(price_update_callback, pattern=r"^price_update_")) # NEW
     app.add_handler(CallbackQueryHandler(game_info_callback, pattern=r"^game_")); app.add_handler(CallbackQueryHandler(blackjack_callback, pattern=r"^bj_"))
     app.add_handler(CallbackQueryHandler(coin_flip_callback, pattern=r"^flip_")); app.add_handler(CallbackQueryHandler(tower_callback, pattern=r"^tower_"))
