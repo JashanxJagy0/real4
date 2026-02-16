@@ -546,21 +546,102 @@ ACHIEVEMENTS = {
     "referral_master": {"name": "🤝 Connector", "description": "Refer 5 active users.", "emoji": "🤝", "type": "referrals", "value": 5},
 }
 ## NEW FEATURE - Level System ##
-LEVELS = [
-    {"level": 0, "name": "None", "wager_required": 0, "reward": 0, "rakeback_percentage": 0.01},
-    {"level": 1, "name": "Bronze", "wager_required": 10000, "reward": 15, "rakeback_percentage": 0.03},
-    {"level": 2, "name": "Silver", "wager_required": 50000, "reward": 30, "rakeback_percentage": 0.04},
-    {"level": 3, "name": "Gold", "wager_required": 100000, "reward": 60, "rakeback_percentage": 0.06},
-    {"level": 4, "name": "Platinum I", "wager_required": 250000, "reward": 100, "rakeback_percentage": 0.07},
-    {"level": 5, "name": "Platinum II", "wager_required": 500000, "reward": 200, "rakeback_percentage": 0.08},
-    {"level": 6, "name": "Platinum III", "wager_required": 1000000, "reward": 400, "rakeback_percentage": 0.09},
-    {"level": 7, "name": "Platinum IV", "wager_required": 2500000, "reward": 800, "rakeback_percentage": 0.09},
-    {"level": 8, "name": "Platinum V", "wager_required": 5000000, "reward": 1600, "rakeback_percentage": 0.10},
-    {"level": 9, "name": "Platinum VI", "wager_required": 10000000, "reward": 3200, "rakeback_percentage": 0.10},
-    {"level": 10, "name": "Diamond I", "wager_required": 25000000, "reward": 6400, "rakeback_percentage": 0.11},
-    {"level": 11, "name": "Diamond II", "wager_required": 50000000, "reward": 25600, "rakeback_percentage": 0.11},
-    {"level": 12, "name": "Diamond III", "wager_required": 100000000, "reward": 51200, "rakeback_percentage": 0.12},
+# --- NEW LEVEL CONFIGURATION ---
+LEVEL_ORDER = [
+    "Bronze", "Silver", "Gold", "Platinum", "Diamond",
+    "Emerald", "Ruby", "Sapphire"
 ]
+
+LEVELS_DATA = {
+    "Bronze": [
+        ("Bronze I", 100, 1), ("Bronze II", 500, 2), ("Bronze III", 1000, 2.5),
+        ("Bronze IV", 2500, 7.5), ("Bronze V", 5000, 12.5),
+    ],
+    "Silver": [
+        ("Silver I", 10000, 25), ("Silver II", 15200, 26), ("Silver III", 20500, 26.5),
+        ("Silver IV", 26000, 27.5), ("Silver V", 32000, 30),
+    ],
+    "Gold": [
+        ("Gold I", 39000, 35), ("Gold II", 48000, 45), ("Gold III", 58000, 50),
+        ("Gold IV", 69000, 55), ("Gold V", 81000, 60),
+    ],
+    "Platinum": [
+        ("Platinum I", 94000, 65), ("Platinum II", 107500, 67.5), ("Platinum III", 122000, 72.5),
+        ("Platinum IV", 138000, 80), ("Platinum V", 155000, 85),
+    ],
+    "Diamond": [
+        ("Diamond I", 173000, 90), ("Diamond II", 192000, 95), ("Diamond III", 211500, 97.5),
+        ("Diamond IV", 232000, 102), ("Diamond V", 253000, 105),
+    ],
+    "Emerald": [
+        ("Emerald I", 275000, 110), ("Emerald II", 298000, 115), ("Emerald III", 322000, 120),
+        ("Emerald IV", 347000, 125), ("Emerald V", 373000, 130),
+    ],
+    "Ruby": [
+        ("Ruby I", 400000, 135), ("Ruby II", 428000, 140), ("Ruby III", 457000, 145),
+        ("Ruby IV", 487000, 150), ("Ruby V", 518000, 155),
+    ],
+    "Sapphire": [
+        ("Sapphire I", 550000, 160), ("Sapphire II", 583000, 165), ("Sapphire III", 617000, 170),
+        ("Sapphire IV", 652000, 175), ("Sapphire V", 688000, 180),
+    ]
+}
+
+# Tier-based rakeback percentages
+TIER_RAKEBACK = {
+    "Bronze": 1, "Silver": 3, "Gold": 5, "Platinum": 7,
+    "Diamond": 9, "Emerald": 11, "Ruby": 13, "Sapphire": 15
+}
+
+# Tier-specific emojis for level display
+TIER_EMOJI = {
+    "Bronze": "🥉", "Silver": "🥈", "Gold": "🥇", "Platinum": "⭐",
+    "Diamond": "💎", "Emerald": "🟢", "Ruby": "🔴", "Sapphire": "🔵"
+}
+
+# Pre-calculate navigation map for the pagination buttons
+LEVEL_NAVIGATION = {}
+for i, tier in enumerate(LEVEL_ORDER):
+    prev_t = LEVEL_ORDER[i-1] if i > 0 else None
+    next_t = LEVEL_ORDER[i+1] if i < len(LEVEL_ORDER)-1 else None
+    LEVEL_NAVIGATION[tier] = {"prev": prev_t, "next": next_t}
+
+def _flatten_levels():
+    """Return [(level_name, threshold_wager, bonus), ...] in progression order."""
+    flat = []
+    for tier in LEVEL_ORDER:
+        for name, wager, bonus in LEVELS_DATA[tier]:
+            flat.append((name, wager, bonus))
+    return flat
+
+ALL_LEVELS = _flatten_levels()
+
+def _get_total_wager(user_id: int) -> float:
+    """Get total wager from user_stats (JSON) instead of SQL."""
+    if user_id not in user_stats:
+        return 0.0
+    return user_stats[user_id].get("bets", {}).get("amount", 0.0)
+
+def _current_and_next_level(total_wager: float):
+    """Find current level by highest threshold <= total_wager."""
+    curr_idx = -1
+    for i, (name, threshold, bonus) in enumerate(ALL_LEVELS):
+        if total_wager >= threshold:
+            curr_idx = i
+        else:
+            break
+
+    current = ALL_LEVELS[curr_idx] if curr_idx >= 0 else ("None", 0, 0)
+    next_idx = curr_idx + 1
+    next_level = ALL_LEVELS[next_idx] if next_idx < len(ALL_LEVELS) else None
+    return current, next_level
+
+def _progress_bar(current, target, length=10):
+    """Generate a visual progress bar."""
+    if target == 0: return "▬" * length
+    pct = min(1.0, current / target)
+    fill = int(pct * length)
+    return "🔘" * fill + "▬" * (length - fill)
 ## NEW FEATURE - Language Support ##
 # Comprehensive language system with 6 supported languages loaded from text files
 def get_user_lang(user_id):
@@ -3029,7 +3110,7 @@ def get_text(user_id_or_key, key_or_lang=None, **kwargs):
 
 async def safe_edit_message(query, text, reply_markup=None, parse_mode=None, disable_web_page_preview=None):
     """
-    Safely edit a message. If the source is a PhotoMessage, try to edit caption first.
+    Safely edit a message. If the source is a PhotoMessage in DMs, delete it and send new text message.
     In groups, avoid deleting messages to prevent disappearing menus.
     Automatically sets menu ownership if reply_markup is provided.
     """
@@ -3042,18 +3123,18 @@ async def safe_edit_message(query, text, reply_markup=None, parse_mode=None, dis
             disable_web_page_preview=disable_web_page_preview
         )
     except Exception:
-        # If it's a photo message, try to edit caption
-        try:
-            await query.edit_message_caption(
-                caption=text,
-                reply_markup=reply_markup,
-                parse_mode=parse_mode
-            )
-        except Exception:
-            # If editing caption fails, check if we're in a group
-            chat_type = query.message.chat.type
-            if chat_type in ["group", "supergroup"]:
-                # NEW: In groups, don't delete - just send a new message as reply
+        # edit_message_text failed - likely a photo message
+        chat_type = query.message.chat.type
+        if chat_type in ["group", "supergroup"]:
+            # In groups: try editing caption first to keep the message visible
+            try:
+                await query.edit_message_caption(
+                    caption=text,
+                    reply_markup=reply_markup,
+                    parse_mode=parse_mode
+                )
+            except Exception:
+                # If editing caption fails, send a new message as reply
                 try:
                     new_message = await query.message.reply_text(
                         text=text,
@@ -3067,18 +3148,23 @@ async def safe_edit_message(query, text, reply_markup=None, parse_mode=None, dis
                     return
                 except Exception:
                     pass
-            else:
-                # In DMs, we can safely delete and send new
-                try:
-                    await query.message.delete()
-                except Exception:
-                    pass
-                await query.message.reply_text(
-                    text=text,
-                    reply_markup=reply_markup,
-                    parse_mode=parse_mode,
-                    disable_web_page_preview=disable_web_page_preview
-                )
+        else:
+            # In DMs: delete the photo message and send a new text-only message
+            # This makes the picture "disappear" when navigating via inline buttons
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
+            new_message = await query.message.reply_text(
+                text=text,
+                reply_markup=reply_markup,
+                parse_mode=parse_mode,
+                disable_web_page_preview=disable_web_page_preview
+            )
+            # Set ownership on the new message
+            if reply_markup is not None and hasattr(query, 'from_user'):
+                set_menu_owner(new_message, query.from_user.id)
+            return
     
     # Automatically set menu ownership when there's a keyboard
     if reply_markup is not None and hasattr(query, 'from_user'):
@@ -4293,45 +4379,59 @@ async def check_and_award_achievements(user_id, context, multiplier=0):
                     logging.warning(f"Could not send achievement notification to user {user_id}")
 ## NEW FEATURE - Level System Logic ##
 def get_user_level(user_id: int):
-    """Determines a user's current level based on their total wagered amount."""
-    if user_id not in user_stats:
-        return LEVELS[0]
+    """Determines a user's current level based on their total wagered amount.
+    Returns a dict compatible with old code: {level, name, wager_required, reward, rakeback_percentage}"""
+    total_wager = _get_total_wager(user_id)
+    current, next_level = _current_and_next_level(total_wager)
     
-    wagered = user_stats[user_id].get("bets", {}).get("amount", 0.0)
-    current_level = LEVELS[0]
-    for level_data in reversed(LEVELS):
-        if wagered >= level_data["wager_required"]:
-            current_level = level_data
+    # Determine the tier for rakeback
+    level_name = current[0]  # e.g. "Bronze I"
+    tier = level_name.split()[0] if level_name != "None" else "Bronze"
+    rakeback = TIER_RAKEBACK.get(tier, 1)
+    
+    # Find level index in ALL_LEVELS
+    level_idx = -1
+    for i, (name, wager, bonus) in enumerate(ALL_LEVELS):
+        if name == level_name:
+            level_idx = i
             break
-    return current_level
+    
+    return {
+        "level": level_idx,
+        "name": level_name,
+        "wager_required": current[1],
+        "reward": current[2],
+        "rakeback_percentage": rakeback
+    }
 
 async def check_and_award_level_up(user_id: int, context: ContextTypes.DEFAULT_TYPE):
     """Checks for level-up, awards reward, and notifies the user."""
     if user_id not in user_stats:
         return
 
-    current_level_data = get_user_level(user_id)
-    level_num = current_level_data["level"]
-    
+    total_wager = _get_total_wager(user_id)
     claimed_rewards = user_stats[user_id].get("claimed_level_rewards", [])
-
-    if level_num > 0 and level_num not in claimed_rewards:
-        reward_amount = current_level_data["reward"]
-        user_wallets[user_id] += reward_amount
-        user_stats[user_id].setdefault("claimed_level_rewards", []).append(level_num)
-        save_user_data(user_id)
-        
-        # Notify the user
-        try:
-            await context.bot.send_message(
-                chat_id=user_id,
-                text=(f"🎉 <b>Level Up!</b> 🎉\n\n"
-                      f"Congratulations! You have reached <b>Level {level_num} ({current_level_data['name']})</b>.\n"
-                      f"You have been awarded a one-time bonus of <b>${reward_amount:.2f}</b>!"),
-                parse_mode=ParseMode.HTML
-            )
-        except (BadRequest, Forbidden):
-            logging.warning(f"Could not send level-up notification to user {user_id}")
+    
+    for level_name, level_wager, bonus in ALL_LEVELS:
+        if total_wager < level_wager:
+            break  # Levels are ordered, no need to check further
+        if level_name not in claimed_rewards:
+            # Award bonus
+            user_wallets[user_id] += bonus
+            user_stats[user_id].setdefault("claimed_level_rewards", []).append(level_name)
+            save_user_data(user_id)
+            
+            # Notify the user
+            try:
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=(f"🎉 <b>Level Up!</b> 🎉\n\n"
+                          f"Congratulations! You have reached <b>{level_name}</b>.\n"
+                          f"You have been awarded a one-time bonus of <b>${bonus:.2f}</b>!"),
+                    parse_mode=ParseMode.HTML
+                )
+            except (BadRequest, Forbidden):
+                logging.warning(f"Could not send level-up notification to user {user_id}")
 
 async def process_referral_commission(user_id, amount, commission_type):
     if user_id not in user_stats or not user_stats[user_id].get('referral', {}).get('referrer_id'):
@@ -4608,6 +4708,24 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pf_id = deep_link_arg.replace("provablyfair_", "")
             await handle_provably_fair_deep_link(update, context, pf_id)
             return
+        
+        elif deep_link_arg == "deposit":
+            await ensure_user_in_wallets(user.id, user.username, None, context, user.first_name)
+            await deposit_command(update, context)
+            return
+        
+        elif deep_link_arg == "withdraw":
+            await ensure_user_in_wallets(user.id, user.username, None, context, user.first_name)
+            # Show withdraw info in DM
+            user_currency = get_user_currency(user.id)
+            formatted_balance = format_balance_with_locked(user.id, user_currency)
+            await update.message.reply_text(
+                f"💸 <b>Withdraw</b>\n\n"
+                f"<b>Your Balance:</b> {formatted_balance}\n\n"
+                f"Use /withdraw to start a withdrawal.",
+                parse_mode=ParseMode.HTML
+            )
+            return
 
     await ensure_user_in_wallets(user.id, user.username, referrer_id, context, user.first_name)
 
@@ -4621,6 +4739,62 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_currency = get_user_currency(user.id)
     formatted_balance = format_balance_with_locked(user.id, user_currency)
 
+    # Get total wagers for display
+    stats = user_stats.get(user.id, {})
+    total_wagered = stats.get('bets', {}).get('amount', 0.0)
+    formatted_wagers = format_currency(total_wagered, user_currency)
+
+    # Check if in group chat
+    is_group = update.effective_chat.type in ["group", "supergroup"]
+    
+    if is_group:
+        # Group chat: show template image with Deposit/Withdraw link buttons only
+        bot_username = (await context.bot.get_me()).username
+        keyboard = [
+            [
+                apply_button_style(InlineKeyboardButton("💎 Deposit", url=f"https://t.me/{bot_username}?start=deposit"), 'primary'),  # BLUE
+                apply_button_style(InlineKeyboardButton("💸 Withdraw", url=f"https://t.me/{bot_username}?start=withdraw"), 'success')  # GREEN
+            ],
+        ]
+        
+        welcome_text = (
+            "🐱 <b>Welcome to Casino ⚡</b>\n\n"
+            "⭐️ Casino - the best online mini-games platform on Telegram\n"
+            f"💵 <b>Balance:</b> {formatted_balance}\n"
+            f"👑 <b>Wagers:</b> {formatted_wagers}\n\n"
+            "🎮 Choose an option below to get started!"
+        )
+        
+        reply_markup = create_styled_keyboard(keyboard)
+        
+        dashboard_image = await generate_dashboard_image(user.id, context)
+        if dashboard_image and update.message:
+            try:
+                sent_message = await update.message.reply_photo(
+                    photo=dashboard_image,
+                    caption=welcome_text,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=reply_markup
+                )
+                set_menu_owner(sent_message, user.id)
+            except Exception as e:
+                logging.error(f"Error sending dashboard image in group: {e}")
+                sent_message = await update.message.reply_text(
+                    welcome_text,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=reply_markup
+                )
+                set_menu_owner(sent_message, user.id)
+        elif update.message:
+            sent_message = await update.message.reply_text(
+                welcome_text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=reply_markup
+            )
+            set_menu_owner(sent_message, user.id)
+        return
+
+    # DM: Original behavior
     # NEW UI STRUCTURE - Casino themed with COLORED buttons (Bot API 9.4)
     keyboard = [
         # Row 1: Deposit & Withdraw with styles
@@ -5068,12 +5242,30 @@ async def games_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user if update.effective_user else None
     user_lang = get_user_lang(user.id) if user else DEFAULT_LANG
     
-    keyboard = [
-        [apply_button_style(InlineKeyboardButton("🔥 House Games", callback_data="games_category_house"), 'primary')],  # BLUE
-        [apply_button_style(InlineKeyboardButton("🎲 Emoji Games", callback_data="games_category_emoji"), 'success')],  # GREEN
-        [InlineKeyboardButton("⚡ Official Group", url="https://t.me/playcsino").to_dict()],
-        [apply_button_style(InlineKeyboardButton(get_text("back", user_lang), callback_data="back_to_main"), 'danger')]  # RED
-    ]
+    # Determine if in group chat
+    is_group = False
+    if update.callback_query:
+        try:
+            is_group = update.callback_query.message.chat.type in ["group", "supergroup"]
+        except AttributeError:
+            pass
+    elif update.effective_chat:
+        is_group = update.effective_chat.type in ["group", "supergroup"]
+    
+    if is_group:
+        # Group chat: only House Games and Emoji Games, no official link, no back button
+        keyboard = [
+            [apply_button_style(InlineKeyboardButton("🔥 House Games", callback_data="games_category_house"), 'primary')],  # BLUE
+            [apply_button_style(InlineKeyboardButton("🎲 Emoji Games", callback_data="games_category_emoji"), 'success')],  # GREEN
+        ]
+    else:
+        # DM: full menu
+        keyboard = [
+            [apply_button_style(InlineKeyboardButton("🔥 House Games", callback_data="games_category_house"), 'primary')],  # BLUE
+            [apply_button_style(InlineKeyboardButton("🎲 Emoji Games", callback_data="games_category_emoji"), 'success')],  # GREEN
+            [InlineKeyboardButton("⚡ Official Group", url="https://t.me/playcsino").to_dict()],
+            [apply_button_style(InlineKeyboardButton(get_text("back", user_lang), callback_data="back_to_main"), 'danger')]  # RED
+        ]
     text = get_text("games_menu", user_lang)
 
     if update.callback_query:
@@ -6467,20 +6659,34 @@ def get_roulette_number_emoji(number):
     else:
         return "⚫"
 
-def create_roulette_menu_keyboard(user_id, bet_amount):
-    """Create the main roulette menu with betting options (COLORED buttons - Bot API 9.4)"""
+def create_roulette_menu_keyboard(user_id, bet_amount, selected=None):
+    """Create the main roulette menu with betting options (COLORED buttons - Bot API 9.4)
+    selected: the currently selected choice key (e.g. 'dozen1', 'red', 'even', etc.)"""
+    # Map internal choice names back to action keys for highlighting
+    selected_actions = set()
+    if selected:
+        reverse_map = {
+            "dozen1": "1-12", "dozen2": "13-24", "dozen3": "25-36",
+            "low": "1-18", "high": "19-36",
+            "even": "even", "odd": "odd",
+            "red": "red", "black": "black"
+        }
+        action_key = reverse_map.get(selected, selected)
+        selected_actions.add(action_key)
+    
+    def _btn(text, action):
+        btn = InlineKeyboardButton(text, callback_data=f"roul_{action}_{user_id}")
+        if action in selected_actions:
+            return apply_button_style(btn, 'success')  # GREEN for selected
+        return btn.to_dict()
+    
     keyboard = [
         [apply_button_style(InlineKeyboardButton("▶️ Start", callback_data=f"roul_start_{user_id}"), 'success')],  # GREEN
         [InlineKeyboardButton("🎯 Bet on Number", callback_data=f"roul_bet_number_{user_id}").to_dict()],
-        [InlineKeyboardButton("1-12", callback_data=f"roul_1-12_{user_id}").to_dict(),
-         InlineKeyboardButton("13-24", callback_data=f"roul_13-24_{user_id}").to_dict(),
-         InlineKeyboardButton("25-36", callback_data=f"roul_25-36_{user_id}").to_dict()],
-        [InlineKeyboardButton("1-18", callback_data=f"roul_1-18_{user_id}").to_dict(),
-         InlineKeyboardButton("19-36", callback_data=f"roul_19-36_{user_id}").to_dict()],
-        [InlineKeyboardButton("Even", callback_data=f"roul_even_{user_id}").to_dict(),
-         InlineKeyboardButton("Odd", callback_data=f"roul_odd_{user_id}").to_dict()],
-        [InlineKeyboardButton("🔴 Red", callback_data=f"roul_red_{user_id}").to_dict(),
-         InlineKeyboardButton("⚫ Black", callback_data=f"roul_black_{user_id}").to_dict()],
+        [_btn("1-12", "1-12"), _btn("13-24", "13-24"), _btn("25-36", "25-36")],
+        [_btn("1-18", "1-18"), _btn("19-36", "19-36")],
+        [_btn("Even", "even"), _btn("Odd", "odd")],
+        [_btn("🔴 Red", "red"), _btn("⚫ Black", "black")],
         [apply_button_style(InlineKeyboardButton("❌ Cancel Bet", callback_data=f"roul_cancel_{user_id}"), 'danger')]  # RED
     ]
     return create_styled_keyboard(keyboard)
@@ -7006,7 +7212,7 @@ async def roulette_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 query,
                 menu_text,
                 parse_mode=ParseMode.HTML,
-                reply_markup=create_roulette_menu_keyboard(user.id, bet_amount)
+                reply_markup=create_roulette_menu_keyboard(user.id, bet_amount, selected=choice)
             )
             return
         else:
@@ -7285,17 +7491,19 @@ def build_tower_keyboard(game_state):
             safe_pos = selected_tiles[floor] if floor < len(selected_tiles) else None
             
             for col in range(tiles_per_floor):
-                if col == safe_pos:
+                if col == snake_pos and status != 'active':
+                    # Reveal snake after game ends (on all floors including unreached)
+                    # This must be checked BEFORE safe_pos because when user hits a snake,
+                    # safe_pos == snake_pos and we want to show snake emoji, not tree
+                    btn_dict = apply_button_style(
+                        InlineKeyboardButton(TILE["snake"], callback_data=f"tower_noop"),
+                        'danger'  # Red background
+                    )
+                elif col == safe_pos:
                     # User's safe pick - show as green tree
                     btn_dict = apply_button_style(
                         InlineKeyboardButton(TILE["safe"], callback_data=f"tower_noop"),
                         'success'  # Green background
-                    )
-                elif col == snake_pos and status != 'active':
-                    # Reveal snake after game ends (on all floors including unreached)
-                    btn_dict = apply_button_style(
-                        InlineKeyboardButton(TILE["snake"], callback_data=f"tower_noop"),
-                        'danger'  # Red background
                     )
                 else:
                     # Other tiles
@@ -7763,7 +7971,7 @@ async def handle_tower_pick(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         # Build keyboard showing revealed board with all snakes
         keyboard_markup = build_tower_keyboard(game)
         # Add provably fair button
-        keyboard = keyboard_markup.inline_keyboard
+        keyboard = list(keyboard_markup.inline_keyboard)
         keyboard.append([await create_provably_fair_button(game_id, context)])
         
         await query.edit_message_text(
@@ -7805,7 +8013,7 @@ async def handle_tower_pick(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         # Build keyboard showing revealed board
         keyboard_markup = build_tower_keyboard(game)
         # Add provably fair button
-        keyboard = keyboard_markup.inline_keyboard
+        keyboard = list(keyboard_markup.inline_keyboard)
         keyboard.append([await create_provably_fair_button(game_id, context)])
         
         await query.edit_message_text(
@@ -7871,7 +8079,7 @@ async def handle_tower_cashout(update: Update, context: ContextTypes.DEFAULT_TYP
     # Build keyboard showing revealed board
     keyboard_markup = build_tower_keyboard(game)
     # Add provably fair button
-    keyboard = keyboard_markup.inline_keyboard
+    keyboard = list(keyboard_markup.inline_keyboard)
     keyboard.append([await create_provably_fair_button(game_id, context)])
     
     await query.edit_message_text(
@@ -10738,8 +10946,19 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE, from
     user = update.effective_user
     await ensure_user_in_wallets(user.id, user.username, context=context, first_name=user.first_name)
     stats = user_stats[user.id]
-    total_deposits = sum(d['amount'] for d in stats.get('deposits', []))
-    total_withdrawals = sum(w['amount'] for w in stats.get('withdrawals', []))
+    
+    # Determine if in group chat
+    is_group = False
+    if update.callback_query:
+        try:
+            is_group = update.callback_query.message.chat.type in ["group", "supergroup"]
+        except AttributeError:
+            pass
+    elif update.effective_chat:
+        is_group = update.effective_chat.type in ["group", "supergroup"]
+    
+    # Check if showing 24hr or all-time stats (for group chats)
+    stats_view = context.user_data.get('stats_view', 'all_time')
     
     # Get user level
     level_data = get_user_level(user.id)
@@ -10749,61 +10968,116 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE, from
     balance = user_wallets.get(user.id, 0.0)
     formatted_balance = format_currency(balance, user_currency)
     
-    # Calculate additional stats
-    total_wagered = stats.get('bets', {}).get('amount', 0.0)
-    formatted_wagered = format_currency(total_wagered, user_currency)
-    formatted_deposits = format_currency(total_deposits, user_currency)
-    formatted_withdrawals = format_currency(total_withdrawals, user_currency)
-    formatted_tips_received = format_currency(stats.get('tips_received', {}).get('amount', 0.0), user_currency)
-    formatted_tips_sent = format_currency(stats.get('tips_sent', {}).get('amount', 0.0), user_currency)
-    formatted_rain = format_currency(stats.get('rain_received', {}).get('amount', 0.0), user_currency)
-    formatted_pnl = format_currency(stats.get('pnl', 0.0), user_currency)
+    if is_group and stats_view == '24h':
+        # Calculate 24hr stats from game_sessions
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(hours=24)
+        user_game_ids = stats.get("game_sessions", [])
+        
+        bets_24h = 0
+        wins_24h = 0
+        losses_24h = 0
+        wagered_24h = 0.0
+        
+        for gid in user_game_ids:
+            game = game_sessions.get(gid)
+            if not game:
+                continue
+            try:
+                ts = game.get("timestamp", "")
+                game_time = datetime.fromisoformat(ts.replace('Z', '+00:00')) if ts else None
+                if game_time and game_time >= cutoff:
+                    bets_24h += 1
+                    bet_amt = game.get("bet_amount", 0.0)
+                    wagered_24h += bet_amt
+                    if game.get("win") is True:
+                        wins_24h += 1
+                    elif game.get("win") is False:
+                        losses_24h += 1
+            except (ValueError, TypeError):
+                continue
+        
+        win_rate = (wins_24h / bets_24h * 100) if bets_24h > 0 else 0
+        formatted_wagered = format_currency(wagered_24h, user_currency)
+        
+        text = (
+            f"📊 <b>Your Stats - Last 24 Hours</b>\n\n"
+            f"👤 <b>User:</b> @{stats.get('userinfo', {}).get('username','N/A')}\n"
+            f"🦄 <b>Level:</b> {level_data['name']}\n"
+            f"💰 <b>Balance:</b> {formatted_balance}\n\n"
+            f"🎲 <b>Betting Stats (24h):</b>\n"
+            f"  Total Bets: {bets_24h}\n"
+            f"  Wins: {wins_24h} | Losses: {losses_24h}\n"
+            f"  Win Rate: {win_rate:.1f}%\n"
+            f"  Total Wagered: {formatted_wagered}\n"
+        )
+    else:
+        # All-time stats (default)
+        total_deposits = sum(d['amount'] for d in stats.get('deposits', []))
+        total_withdrawals = sum(w['amount'] for w in stats.get('withdrawals', []))
+        
+        total_wagered = stats.get('bets', {}).get('amount', 0.0)
+        formatted_wagered = format_currency(total_wagered, user_currency)
+        formatted_deposits = format_currency(total_deposits, user_currency)
+        formatted_withdrawals = format_currency(total_withdrawals, user_currency)
+        formatted_tips_received = format_currency(stats.get('tips_received', {}).get('amount', 0.0), user_currency)
+        formatted_tips_sent = format_currency(stats.get('tips_sent', {}).get('amount', 0.0), user_currency)
+        formatted_rain = format_currency(stats.get('rain_received', {}).get('amount', 0.0), user_currency)
+        formatted_pnl = format_currency(stats.get('pnl', 0.0), user_currency)
+        
+        referral_count = len(stats.get('referral', {}).get('referred_users', []))
+        referral_commission = stats.get('referral', {}).get('commission_earned', 0.0)
+        formatted_commission = format_currency(referral_commission, user_currency)
+        
+        achievement_count = len(stats.get('achievements', []))
+        
+        total_bets = stats.get('bets', {}).get('count', 0)
+        wins = stats.get('bets', {}).get('wins', 0)
+        losses = stats.get('bets', {}).get('losses', 0)
+        win_rate = (wins / total_bets * 100) if total_bets > 0 else 0
+        
+        title = "📊 <b>Your Complete Stats</b>" if not is_group else "📊 <b>Your Stats - All Time</b>"
+        
+        text = (
+            f"{title}\n\n"
+            f"👤 <b>User Info:</b>\n"
+            f"  Username: @{stats.get('userinfo', {}).get('username','N/A')}\n"
+            f"  User ID: <code>{user.id}</code>\n"
+            f"  Join Date: {stats.get('userinfo', {}).get('join_date', 'N/A')[:10]}\n"
+            f"  Currency: {user_currency}\n\n"
+            f"🦄 <b>Level:</b> {level_data['name']}\n"
+            f"  Rakeback Rate: {level_data['rakeback_percentage']}%\n\n"
+            f"💰 <b>Balance:</b> {formatted_balance}\n\n"
+            f"🎲 <b>Betting Stats:</b>\n"
+            f"  Total Bets: {total_bets}\n"
+            f"  Wins: {wins} | Losses: {losses}\n"
+            f"  Win Rate: {win_rate:.1f}%\n"
+            f"  Total Wagered: {formatted_wagered}\n"
+            f"  PvP Wins: {stats.get('bets', {}).get('pvp_wins', 0)}\n\n"
+            f"💵 <b>Financial Stats:</b>\n"
+            f"  Deposits: {len(stats.get('deposits',[]))} ({formatted_deposits})\n"
+            f"  Withdrawals: {len(stats.get('withdrawals',[]))} ({formatted_withdrawals})\n"
+            f"  P&L: {formatted_pnl}\n\n"
+            f"🎁 <b>Social Stats:</b>\n"
+            f"  Tips Received: {stats.get('tips_received', {}).get('count', 0)} ({formatted_tips_received})\n"
+            f"  Tips Sent: {stats.get('tips_sent', {}).get('count', 0)} ({formatted_tips_sent})\n"
+            f"  Rain Received: {stats.get('rain_received', {}).get('count', 0)} ({formatted_rain})\n\n"
+            f"🤝 <b>Referral Stats:</b>\n"
+            f"  Referred Users: {referral_count}\n"
+            f"  Commission Earned: {formatted_commission}\n\n"
+            f"🏆 <b>Achievements:</b> {achievement_count} unlocked\n"
+        )
     
-    # Get referral stats
-    referral_count = len(stats.get('referral', {}).get('referred_users', []))
-    referral_commission = stats.get('referral', {}).get('commission_earned', 0.0)
-    formatted_commission = format_currency(referral_commission, user_currency)
+    if is_group:
+        # Group chat: no back button, add 24h/all-time toggle buttons
+        keyboard = [
+            [apply_button_style(InlineKeyboardButton("🕐 Last 24 Hours", callback_data=f"stats_24h_{user.id}"), 'primary')],  # BLUE
+            [apply_button_style(InlineKeyboardButton("📊 All Time", callback_data=f"stats_alltime_{user.id}"), 'success')],  # GREEN
+        ]
+    else:
+        keyboard = [[InlineKeyboardButton("🔙 Back to More", callback_data="main_more")]]
     
-    # Get achievement count
-    achievement_count = len(stats.get('achievements', []))
-    
-    # Win rate calculation
-    total_bets = stats.get('bets', {}).get('count', 0)
-    wins = stats.get('bets', {}).get('wins', 0)
-    losses = stats.get('bets', {}).get('losses', 0)
-    win_rate = (wins / total_bets * 100) if total_bets > 0 else 0
-    
-    text = (
-        f"📊 <b>Your Complete Stats</b>\n\n"
-        f"👤 <b>User Info:</b>\n"
-        f"  Username: @{stats.get('userinfo', {}).get('username','N/A')}\n"
-        f"  User ID: <code>{user.id}</code>\n"
-        f"  Join Date: {stats.get('userinfo', {}).get('join_date', 'N/A')[:10]}\n"
-        f"  Currency: {user_currency}\n\n"
-        f"🦄 <b>Level:</b> {level_data['level']} ({level_data['name']})\n"
-        f"  Rakeback Rate: {level_data['rakeback_percentage']}%\n\n"
-        f"💰 <b>Balance:</b> {formatted_balance}\n\n"
-        f"🎲 <b>Betting Stats:</b>\n"
-        f"  Total Bets: {total_bets}\n"
-        f"  Wins: {wins} | Losses: {losses}\n"
-        f"  Win Rate: {win_rate:.1f}%\n"
-        f"  Total Wagered: {formatted_wagered}\n"
-        f"  PvP Wins: {stats.get('bets', {}).get('pvp_wins', 0)}\n\n"
-        f"💵 <b>Financial Stats:</b>\n"
-        f"  Deposits: {len(stats.get('deposits',[]))} ({formatted_deposits})\n"
-        f"  Withdrawals: {len(stats.get('withdrawals',[]))} ({formatted_withdrawals})\n"
-        f"  P&L: {formatted_pnl}\n\n"
-        f"🎁 <b>Social Stats:</b>\n"
-        f"  Tips Received: {stats.get('tips_received', {}).get('count', 0)} ({formatted_tips_received})\n"
-        f"  Tips Sent: {stats.get('tips_sent', {}).get('count', 0)} ({formatted_tips_sent})\n"
-        f"  Rain Received: {stats.get('rain_received', {}).get('count', 0)} ({formatted_rain})\n\n"
-        f"🤝 <b>Referral Stats:</b>\n"
-        f"  Referred Users: {referral_count}\n"
-        f"  Commission Earned: {formatted_commission}\n\n"
-        f"🏆 <b>Achievements:</b> {achievement_count} unlocked\n"
-    )
-    
-    keyboard = [[InlineKeyboardButton("🔙 Back to More", callback_data="main_more")]]
+    reply_markup = create_styled_keyboard(keyboard)
     
     # Send dashboard image with stats text in caption (NEW FEATURE - Combined)
     if not from_callback:
@@ -10814,7 +11088,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE, from
                     photo=dashboard_image,
                     caption=text,
                     parse_mode=ParseMode.HTML,
-                    reply_markup=InlineKeyboardMarkup(keyboard)
+                    reply_markup=reply_markup
                 )
                 # Set ownership after sending
                 set_menu_owner(sent_message, user.id)
@@ -10824,11 +11098,39 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE, from
                 # Fall through to text-only message
     
     if from_callback:
-        await safe_edit_message(update.callback_query, text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(keyboard))
+        await safe_edit_message(update.callback_query, text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
     else:
-        sent_message = await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(keyboard))
+        sent_message = await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
         # Set ownership after sending
         set_menu_owner(sent_message, user.id)
+
+@check_banned
+@check_maintenance
+async def stats_view_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle stats 24h/all-time toggle in group chats"""
+    query = update.callback_query
+    user = query.from_user
+    
+    # Parse callback data: stats_24h_USERID or stats_alltime_USERID
+    parts = query.data.split("_")
+    if len(parts) < 3:
+        return
+    
+    button_user_id = int(parts[-1]) if parts[-1].isdigit() else None
+    
+    # User-specific button check
+    if button_user_id and user.id != button_user_id:
+        await query.answer("This menu is not for you!", show_alert=True)
+        return
+    
+    await query.answer()
+    
+    if parts[1] == "24h":
+        context.user_data['stats_view'] = '24h'
+    else:
+        context.user_data['stats_view'] = 'all_time'
+    
+    await stats_command(update, context, from_callback=True)
 
 # --- USERS (OWNER-ONLY) COMMAND ---
 async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -11156,6 +11458,61 @@ async def balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_currency = get_user_currency(user.id)
     formatted_balance = format_balance_with_locked(user.id, user_currency)
     
+    # Get total wagers for display
+    stats = user_stats.get(user.id, {})
+    total_wagered = stats.get('bets', {}).get('amount', 0.0)
+    formatted_wagers = format_currency(total_wagered, user_currency)
+    
+    is_group = update.effective_chat.type in ["group", "supergroup"]
+    
+    if is_group:
+        # Group chat: same as /start - template image with deposit/withdraw link buttons
+        bot_username = (await context.bot.get_me()).username
+        keyboard = [
+            [
+                apply_button_style(InlineKeyboardButton("💎 Deposit", url=f"https://t.me/{bot_username}?start=deposit"), 'primary'),  # BLUE
+                apply_button_style(InlineKeyboardButton("💸 Withdraw", url=f"https://t.me/{bot_username}?start=withdraw"), 'success')  # GREEN
+            ],
+        ]
+        
+        text = (
+            "🐱 <b>Welcome to Casino ⚡</b>\n\n"
+            "⭐️ Casino - the best online mini-games platform on Telegram\n"
+            f"💵 <b>Balance:</b> {formatted_balance}\n"
+            f"👑 <b>Wagers:</b> {formatted_wagers}\n\n"
+            "🎮 Choose an option below to get started!"
+        )
+        
+        reply_markup = create_styled_keyboard(keyboard)
+        
+        dashboard_image = await generate_dashboard_image(user.id, context)
+        if dashboard_image:
+            try:
+                sent_message = await update.message.reply_photo(
+                    photo=dashboard_image,
+                    caption=text,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=reply_markup
+                )
+                set_menu_owner(sent_message, user.id)
+            except Exception as e:
+                logging.error(f"Error sending dashboard image in group: {e}")
+                sent_message = await update.message.reply_text(
+                    text,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=reply_markup
+                )
+                set_menu_owner(sent_message, user.id)
+        else:
+            sent_message = await update.message.reply_text(
+                text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=reply_markup
+            )
+            set_menu_owner(sent_message, user.id)
+        return
+    
+    # DM: original behavior
     keyboard = [
         [
             InlineKeyboardButton("💰 Deposit", callback_data="main_deposit"),
@@ -13258,22 +13615,36 @@ async def leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         else:
             msg += "No wins recorded yet.\n"
     
+    # Determine if in group chat
+    is_group = False
+    if from_callback and update.callback_query:
+        try:
+            is_group = update.callback_query.message.chat.type in ["group", "supergroup"]
+        except AttributeError:
+            pass
+    elif update.effective_chat:
+        is_group = update.effective_chat.type in ["group", "supergroup"]
+    
     # Create inline buttons (user-specific, COLORED buttons - Bot API 9.4)
     keyboard = [
         [
-            InlineKeyboardButton("📅 Weekly", callback_data=f"leaderboard_weekly_{user_id}").to_dict(),
-            InlineKeyboardButton("📆 Monthly", callback_data=f"leaderboard_monthly_{user_id}").to_dict()
+            apply_button_style(InlineKeyboardButton("📅 Weekly", callback_data=f"leaderboard_weekly_{user_id}"), 'primary'),  # BLUE
+            apply_button_style(InlineKeyboardButton("📆 Monthly", callback_data=f"leaderboard_monthly_{user_id}"), 'success')  # GREEN
         ],
         [
-            InlineKeyboardButton("💰 Highest Wins", callback_data=f"leaderboard_wins_{user_id}").to_dict()
+            apply_button_style(InlineKeyboardButton("💰 Highest Wins", callback_data=f"leaderboard_wins_{user_id}"), 'primary')  # BLUE
         ],
         [
-            InlineKeyboardButton("🏆 All Time", callback_data=f"leaderboard_alltime_{user_id}").to_dict()
+            apply_button_style(InlineKeyboardButton("🏆 All Time", callback_data=f"leaderboard_alltime_{user_id}"), 'success')  # GREEN
         ],
-        [
-            apply_button_style(InlineKeyboardButton("🔙 Back to More", callback_data="main_more"), 'danger')  # RED
-        ]
     ]
+    
+    # Only show back button in DMs
+    if not is_group:
+        keyboard.append([
+            apply_button_style(InlineKeyboardButton("🔙 Back to More", callback_data="main_more"), 'danger')  # RED
+        ])
+    
     reply_markup = create_styled_keyboard(keyboard)
 
     if from_callback:
@@ -13351,7 +13722,9 @@ async def referral_command(update: Update, context: ContextTypes.DEFAULT_TYPE, f
 ## NEW FEATURE - /level and /levelall commands ##
 def create_progress_bar(progress, total, length=10):
     """Creates a text-based progress bar."""
-    filled_length = int(length * progress // total)
+    if total <= 0:
+        return "▬" * length
+    filled_length = min(length, int(length * progress // total))
     bar = '■' * filled_length + '□' * (length - filled_length)
     return bar
 
@@ -13361,33 +13734,36 @@ async def level_command(update: Update, context: ContextTypes.DEFAULT_TYPE, from
     user = update.effective_user
     await ensure_user_in_wallets(user.id, user.username, context=context)
     
-    current_level_data = get_user_level(user.id)
-    wagered = user_stats[user.id].get("bets", {}).get("amount", 0.0)
+    total_wager = _get_total_wager(user.id)
+    current, next_level = _current_and_next_level(total_wager)
+    current_name = current[0]
+    tier = current_name.split()[0] if current_name != "None" else "Bronze"
+    rakeback = TIER_RAKEBACK.get(tier, 1)
+    tier_emoji = TIER_EMOJI.get(tier, "🦄")
     
-    text = f"🦄 <b>Your Level: {current_level_data['level']} ({current_level_data['name']})</b>\n\n"
+    text = f"{tier_emoji} <b>Your Level: {current_name}</b>\n\n"
     
-    # Check if user is at max level
-    if current_level_data['level'] == LEVELS[-1]['level']:
+    if next_level is None:
         text += "🏆 You have reached the maximum level!\n"
-        text += f"💰 Total Wagered: ${wagered:,.2f}"
+        text += f"💰 Total Wagered: ${total_wager:,.2f}"
     else:
-        next_level_data = LEVELS[current_level_data['level'] + 1]
-        wager_needed_for_next = next_level_data['wager_required']
-        wager_of_current = current_level_data['wager_required']
+        next_name, next_wager, next_bonus = next_level
+        next_tier = next_name.split()[0]
+        next_emoji = TIER_EMOJI.get(next_tier, "🦄")
+        progress = total_wager - current[1]
+        total_for_level = next_wager - current[1]
         
-        progress = wagered - wager_of_current
-        total_for_level = wager_needed_for_next - wager_of_current
+        bar = _progress_bar(total_wager, next_wager)
+        percentage = (progress / total_for_level * 100) if total_for_level > 0 else 100
         
-        progress_bar = create_progress_bar(progress, total_for_level)
-        percentage = (progress / total_for_level) * 100
-        
-        text += f"<b>Progress to Level {next_level_data['level']} ({next_level_data['name']}):</b>\n"
-        text += f"`{progress_bar}` ({percentage:.1f}%)\n\n"
-        text += f"💰 <b>Wagered:</b> ${wagered:,.2f} / ${wager_needed_for_next:,.2f}\n"
-        text += f"💸 <b>Rakeback:</b> {current_level_data['rakeback_percentage']}%"
+        text += f"<b>Progress to {next_emoji} {next_name}:</b>\n"
+        text += f"{bar} ({percentage:.1f}%)\n\n"
+        text += f"💰 <b>Wagered:</b> ${total_wager:,.2f} / ${next_wager:,.2f}\n"
+        text += f"📊 <b>Wager Needed:</b> ${next_wager - total_wager:,.2f}\n"
+        text += f"💸 <b>Rakeback:</b> {rakeback}%"
 
     keyboard = [
-        [InlineKeyboardButton("📜 View All Levels", callback_data="level_all")],
+        [InlineKeyboardButton("📜 View All Levels", callback_data="levels_Bronze")],
         [InlineKeyboardButton("🔙 Back to More", callback_data="main_more")]
     ]
     
@@ -13400,27 +13776,53 @@ async def level_command(update: Update, context: ContextTypes.DEFAULT_TYPE, from
 
 @check_banned
 @check_maintenance
-async def level_all_command(update: Update, context: ContextTypes.DEFAULT_TYPE, from_callback=False):
+async def level_all_command(update: Update, context: ContextTypes.DEFAULT_TYPE, from_callback=False, tier="Bronze"):
+    """Show levels for a specific tier with pagination"""
     # Handle both command and callback query
     if update.callback_query:
         from_callback = True
-        
-    text = "🦄 <b>All Available Levels</b> 🦄\n\n"
-    for level in LEVELS:
-        text += (f"<b>Level {level['level']} ({level['name']})</b>\n"
-                 f"  - Wager Required: ${level['wager_required']:,}\n"
-                 f"  - One-time Reward: ${level['reward']:,}\n"
-                 f"  - Rakeback Rate: {level['rakeback_percentage']}%\n"
-                 "--------------------\n")
-                 
-    keyboard = [[InlineKeyboardButton("🔙 Back to My Level", callback_data="main_level")]]
+        # Extract tier from callback data if present
+        if update.callback_query.data and update.callback_query.data.startswith("levels_"):
+            tier = update.callback_query.data.replace("levels_", "")
+    
+    if tier not in LEVELS_DATA:
+        tier = "Bronze"
+    
+    user = update.effective_user
+    total_wager = _get_total_wager(user.id) if user else 0.0
+    
+    tier_emoji = TIER_EMOJI.get(tier, "🦄")
+    text = f"{tier_emoji} <b>{tier} Levels</b> {tier_emoji}\n\n"
+    rakeback = TIER_RAKEBACK.get(tier, 1)
+    text += f"💸 Rakeback Rate: {rakeback}%\n\n"
+    
+    for name, wager, bonus in LEVELS_DATA[tier]:
+        reached = "✅" if total_wager >= wager else "⬜"
+        text += (f"{reached} {tier_emoji} <b>{name}</b>\n"
+                 f"  Wager: ${wager:,} | Bonus: ${bonus}\n")
+    
+    # Build navigation keyboard
+    keyboard = []
+    nav_row = []
+    nav = LEVEL_NAVIGATION[tier]
+    if nav["prev"]:
+        prev_emoji = TIER_EMOJI.get(nav['prev'], "")
+        nav_row.append(apply_button_style(InlineKeyboardButton(f"⬅️ {prev_emoji} {nav['prev']}", callback_data=f"levels_{nav['prev']}"), 'primary'))
+    if nav["next"]:
+        next_emoji = TIER_EMOJI.get(nav['next'], "")
+        nav_row.append(apply_button_style(InlineKeyboardButton(f"{next_emoji} {nav['next']} ➡️", callback_data=f"levels_{nav['next']}"), 'primary'))
+    if nav_row:
+        keyboard.append(nav_row)
+    keyboard.append([InlineKeyboardButton("🔙 Back to My Level", callback_data="main_level")])
+    
+    reply_markup = create_styled_keyboard(keyboard)
     
     if from_callback:
-        await update.callback_query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(keyboard))
+        await safe_edit_message(update.callback_query, text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
         # Set ownership after editing
         set_menu_owner(update.callback_query.message, update.callback_query.from_user.id)
     else:
-        sent_message = await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(keyboard))
+        sent_message = await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
         # Set ownership after sending
         if update.effective_user:
             set_menu_owner(sent_message, update.effective_user.id)
@@ -15687,7 +16089,7 @@ def main():
     app.add_handler(CallbackQueryHandler(xdxw_accept_callback, pattern=r"^xdxw_accept_")) # NEW - XdX'w accept challenge
     app.add_handler(CallbackQueryHandler(xdxw_playbot_callback, pattern=r"^xdxw_playbot_")) # NEW - XdX'w play with bot
     app.add_handler(CallbackQueryHandler(xdxw_bot_first_callback, pattern=r"^xdxw_bot_first_")) # NEW - XdX'w bot rolls first
-    app.add_handler(CallbackQueryHandler(level_all_command, pattern=r"^level_all$")) # NEW
+    app.add_handler(CallbackQueryHandler(level_all_command, pattern=r"^levels_")) # NEW - Level pagination
     app.add_handler(CallbackQueryHandler(price_update_callback, pattern=r"^price_update_")) # NEW
     app.add_handler(CallbackQueryHandler(game_info_callback, pattern=r"^game_")); app.add_handler(CallbackQueryHandler(blackjack_callback, pattern=r"^bj_"))
     app.add_handler(CallbackQueryHandler(coin_flip_callback, pattern=r"^flip_")); app.add_handler(CallbackQueryHandler(tower_callback, pattern=r"^tower_"))
@@ -15702,6 +16104,7 @@ def main():
     app.add_handler(CallbackQueryHandler(language_callback, pattern=r"^lang_"))
     app.add_handler(CallbackQueryHandler(currency_callback, pattern=r"^setcurrency_")) # NEW - Currency setting
     app.add_handler(CallbackQueryHandler(leaderboard_callback, pattern=r"^leaderboard_(weekly|monthly|wins|alltime)_")) # NEW - Leaderboard navigation
+    app.add_handler(CallbackQueryHandler(stats_view_callback, pattern=r"^stats_(24h|alltime)_")) # NEW - Stats 24h/all-time toggle
     app.add_handler(CallbackQueryHandler(admin_actions_callback, pattern=r"^admin_(dashboard|users|bot_settings|toggle_maintenance|broadcast|set_house_balance|limits|gift_codes|toggle_withdrawals|pending_withdrawals|active_games|export_data)$"))
     app.add_handler(CallbackQueryHandler(admin_user_search_callback, pattern=r"^admin_user_"))
     app.add_handler(CallbackQueryHandler(settings_callback_handler, pattern=r"^settings_"))
