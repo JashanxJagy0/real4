@@ -605,6 +605,27 @@ def _flatten_levels():
 
 ALL_LEVELS = _flatten_levels()
 
+# Rakeback percentages by tier (for backward compatibility)
+TIER_RAKEBACK = {
+    "Bronze": 0.01,   # 1%
+    "Silver": 0.03,   # 3%
+    "Gold": 0.05,     # 5%
+    "Platinum": 0.07, # 7%
+    "Diamond": 0.09,  # 9%
+    "Emerald": 0.11,  # 11%
+    "Ruby": 0.13,     # 13%
+    "Sapphire": 0.15  # 15%
+}
+
+def _get_tier_from_level_name(level_name: str) -> str:
+    """Extract tier from level name (e.g., 'Bronze I' -> 'Bronze')"""
+    if level_name == "None":
+        return "Bronze"
+    for tier in LEVEL_ORDER:
+        if level_name.startswith(tier):
+            return tier
+    return "Bronze"
+
 def _get_total_wager(user_id: int) -> float:
     """Get total wager from user_stats (JSON) instead of SQL."""
     if user_id not in user_stats:
@@ -4365,13 +4386,30 @@ async def check_and_award_achievements(user_id, context, multiplier=0):
                     logging.warning(f"Could not send achievement notification to user {user_id}")
 ## NEW FEATURE - Level System Logic ##
 def get_user_level(user_id: int):
-    """Determines a user's current level based on their total wagered amount."""
+    """Determines a user's current level based on their total wagered amount.
+    Returns a dictionary for backward compatibility with rakeback system."""
     if user_id not in user_stats:
-        return ("None", 0, 0)
+        return {
+            "name": "None",
+            "wager_required": 0,
+            "reward": 0,
+            "rakeback_percentage": 1.0  # 1%
+        }
     
     wagered = user_stats[user_id].get("bets", {}).get("amount", 0.0)
     current, _ = _current_and_next_level(wagered)
-    return current
+    level_name, threshold, bonus = current
+    
+    # Get rakeback percentage based on tier
+    tier = _get_tier_from_level_name(level_name)
+    rakeback_pct = TIER_RAKEBACK.get(tier, 0.01) * 100  # Convert to percentage (e.g., 0.01 -> 1.0)
+    
+    return {
+        "name": level_name,
+        "wager_required": threshold,
+        "reward": bonus,
+        "rakeback_percentage": rakeback_pct
+    }
 
 async def check_and_award_level_up(user_id: int, context: ContextTypes.DEFAULT_TYPE):
     """Checks for level-up, awards reward, and notifies the user."""
@@ -10849,8 +10887,8 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE, from
         f"  User ID: <code>{user.id}</code>\n"
         f"  Join Date: {stats.get('userinfo', {}).get('join_date', 'N/A')[:10]}\n"
         f"  Currency: {user_currency}\n\n"
-        f"🦄 <b>Level:</b> {level_data['level']} ({level_data['name']})\n"
-        f"  Rakeback Rate: {level_data['rakeback_percentage']}%\n\n"
+        f"🦄 <b>Level:</b> {level_data['name']}\n"
+        f"  Rakeback Rate: {level_data['rakeback_percentage']:.1f}%\n\n"
         f"💰 <b>Balance:</b> {formatted_balance}\n\n"
         f"🎲 <b>Betting Stats:</b>\n"
         f"  Total Bets: {total_bets}\n"
