@@ -4396,9 +4396,20 @@ async def check_and_award_level_up(user_id: int, context: ContextTypes.DEFAULT_T
     claimed_rewards = user_stats[user_id].get("claimed_level_rewards", [])
     
     # Convert old integer-based claims to string-based if necessary
+    # Mark all levels the user has already reached as claimed to avoid duplicate rewards
     if claimed_rewards and isinstance(claimed_rewards[0], int):
+        highest_old_level = max(claimed_rewards)
         user_stats[user_id]["claimed_level_rewards"] = []
         claimed_rewards = []
+        
+        # Mark all levels up to the user's current wager as claimed
+        # This prevents duplicate rewards during migration
+        for level_name, threshold, bonus in ALL_LEVELS:
+            if total_wager >= threshold:
+                user_stats[user_id]["claimed_level_rewards"].append(level_name)
+        claimed_rewards = user_stats[user_id]["claimed_level_rewards"]
+        save_user_data(user_id)
+        return  # Don't award any bonuses during migration
 
     # Check all levels for any unclaimed rewards
     for level_name, threshold, bonus in ALL_LEVELS:
@@ -6193,7 +6204,7 @@ async def flip_replay_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     
     # Check bet limits
     if not check_bet_limits_silent(bet, 'coin_flip'):
-        await query.answer(f"Bet must be between ${MIN_BALANCE:.2f} and ${MAX_BET:.2f}", show_alert=True)
+        await query.answer("Bet amount is outside allowed limits!", show_alert=True)
         return
     
     # Deduct bet
@@ -7450,7 +7461,7 @@ async def dr_replay_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     # Check bet limits
     if not check_bet_limits_silent(bet_amount, 'dice_roll'):
-        await query.answer(f"Bet must be between ${MIN_BALANCE:.2f} and ${MAX_BET:.2f}", show_alert=True)
+        await query.answer("Bet amount is outside allowed limits!", show_alert=True)
         return
     
     # Deduct bet
@@ -8275,7 +8286,7 @@ async def tower_replay_callback(update: Update, context: ContextTypes.DEFAULT_TY
     
     # Check bet limits
     if not check_bet_limits_silent(bet_amount, 'tower'):
-        await query.answer(f"Bet must be between ${MIN_BALANCE:.2f} and ${MAX_BET:.2f}", show_alert=True)
+        await query.answer("Bet amount is outside allowed limits!", show_alert=True)
         return
     
     # Deduct bet
@@ -9154,7 +9165,7 @@ async def emoji_replay_callback(update: Update, context: ContextTypes.DEFAULT_TY
     
     # Check bet limits
     if not check_bet_limits_silent(bet_amount_usd, f'emoji_{game_key}'):
-        await query.answer(f"Bet must be between ${MIN_BALANCE:.2f} and ${MAX_BET:.2f}", show_alert=True)
+        await query.answer("Bet amount is outside allowed limits!", show_alert=True)
         return
     
     # Deduct bet
@@ -9882,7 +9893,7 @@ async def predict_replay_callback(update: Update, context: ContextTypes.DEFAULT_
     
     # Check bet limits
     if not check_bet_limits_silent(bet_amount, 'predict'):
-        await query.answer(f"Bet must be between ${MIN_BALANCE:.2f} and ${MAX_BET:.2f}", show_alert=True)
+        await query.answer("Bet amount is outside allowed limits!", show_alert=True)
         return
     
     # Deduct bet
@@ -10440,7 +10451,7 @@ async def keno_replay_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     
     # Check bet limits
     if not check_bet_limits_silent(bet_amount, 'keno'):
-        await query.answer(f"Bet must be between ${MIN_BALANCE:.2f} and ${MAX_BET:.2f}", show_alert=True)
+        await query.answer("Bet amount is outside allowed limits!", show_alert=True)
         return
     
     # Deduct bet
@@ -11525,7 +11536,7 @@ async def mines_replay_callback(update: Update, context: ContextTypes.DEFAULT_TY
     
     # Check bet limits
     if not check_bet_limits_silent(bet_amount, 'mines'):
-        await query.answer(f"Bet must be between ${MIN_BALANCE:.2f} and ${MAX_BET:.2f}", show_alert=True)
+        await query.answer("Bet amount is outside allowed limits!", show_alert=True)
         return
     
     # Deduct bet
@@ -14367,7 +14378,11 @@ async def level_command(update: Update, context: ContextTypes.DEFAULT_TYPE, from
 @check_banned
 @check_maintenance
 async def level_all_command(update: Update, context: ContextTypes.DEFAULT_TYPE, from_callback=False, tier="Bronze"):
-    """Show all levels for a specific tier with pagination."""
+    """
+    Show all levels for a specific tier with pagination.
+    Uses the new tiered level system (Bronze I-V through Sapphire I-V) with 40 total levels.
+    Supports pagination to navigate between different tier groups.
+    """
     # Handle both command and callback query
     if update.callback_query:
         from_callback = True
