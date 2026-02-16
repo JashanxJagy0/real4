@@ -9140,6 +9140,84 @@ async def execute_group_challenge_game(update: Update, context: ContextTypes.DEF
         parse_mode=ParseMode.HTML
     )
 
+# --- Cashout Calculation for PvB Games ---
+def calculate_cashout(bot_score, bet_amount, game_type, game_mode="normal", game_rolls=1):
+    """
+    Calculate cashout offer based on win probability.
+    
+    Args:
+        bot_score: Bot's total score
+        bet_amount: User's bet amount
+        game_type: Type of game (dice, darts, bowling, football, basket)
+        game_mode: 'normal' (highest wins) or 'crazy' (lowest wins)
+        game_rolls: Number of rolls (1, 2, or 3)
+    
+    Returns:
+        float: Cashout offer amount
+    """
+    # Determine score range based on game type
+    if game_type in ["dice", "dice_bot", "darts", "bowling", "bowl"]:
+        min_score = 1
+        max_score = 6
+    elif game_type in ["football", "goal", "basket"]:
+        min_score = 1
+        max_score = 5
+    elif game_type == "slots":
+        min_score = 1
+        max_score = 64
+    else:
+        # Default to dice range
+        min_score = 1
+        max_score = 6
+    
+    # Calculate possible score range for user (considering number of rolls)
+    user_min = min_score * game_rolls
+    user_max = max_score * game_rolls
+    
+    # Calculate win probability
+    if game_mode == "normal":
+        # Normal mode: highest score wins
+        # If bot scored max, user can only tie (very low cashout)
+        # If bot scored min, user has high chance to win
+        if bot_score >= user_max:
+            # Bot has maximum, user can only tie
+            win_prob = 0.0
+            tie_prob = 1.0 / (user_max - user_min + 1)
+        else:
+            # Calculate probability user scores higher than bot
+            possible_outcomes = user_max - user_min + 1
+            winning_outcomes = user_max - bot_score
+            win_prob = winning_outcomes / possible_outcomes
+            tie_prob = 1.0 / possible_outcomes
+    else:
+        # Crazy mode: lowest score wins
+        if bot_score <= user_min:
+            # Bot has minimum, user can only tie
+            win_prob = 0.0
+            tie_prob = 1.0 / (user_max - user_min + 1)
+        else:
+            # Calculate probability user scores lower than bot
+            possible_outcomes = user_max - user_min + 1
+            winning_outcomes = bot_score - user_min
+            win_prob = winning_outcomes / possible_outcomes
+            tie_prob = 1.0 / possible_outcomes
+    
+    # Potential win amount (double the bet)
+    potential_win = bet_amount * 2
+    
+    # Calculate expected value
+    # Win gives full payout, tie returns bet
+    expected_value = (win_prob * potential_win) + (tie_prob * bet_amount)
+    
+    # Apply house edge (90% of expected value)
+    cashout_offer = expected_value * 0.90
+    
+    # Ensure cashout is at least 10% of bet (minimum offer)
+    # and at most 180% of bet (maximum offer, less than full win)
+    cashout_offer = max(bet_amount * 0.10, min(cashout_offer, bet_amount * 1.80))
+    
+    return round(cashout_offer, 2)
+
 # --- Play vs Bot main logic (bot rolls real emoji) ---
 async def play_vs_bot_game(update: Update, context: ContextTypes.DEFAULT_TYPE, game_type: str, target_score: int):
     user = update.effective_user
@@ -9239,11 +9317,38 @@ async def play_vs_bot_game(update: Update, context: ContextTypes.DEFAULT_TYPE, g
         bot_rolls_text = " + ".join(str(r) for r in bot_rolls)
         
         game_sessions[game_id]["waiting_for"] = "user"
+        game_sessions[game_id]["bot_score"] = bot_total  # Store bot score for this round
+        
+        # Calculate cashout offer
+        cashout_amount = calculate_cashout(bot_total, bet_amount, game_type, game_mode, game_rolls)
+        
+        # Store game state in context for callbacks
+        context.user_data['pvb_game'] = {
+            'game_id': game_id,
+            'bot_score': bot_total,
+            'cashout_amount': cashout_amount,
+            'bet_amount': bet_amount,
+            'game_type': game_type,
+            'game_mode': game_mode,
+            'game_rolls': game_rolls,
+            'emoji': emoji,
+            'target_score': target_score
+        }
+        
+        # Show cashout/roll buttons
+        keyboard = [
+            [InlineKeyboardButton(f"🎲 Roll (Your Turn)", callback_data=f"pvb_roll_{game_id}")],
+            [InlineKeyboardButton(f"💰 Cashout ${cashout_amount:.2f}", callback_data=f"pvb_cashout_{game_id}")]
+        ]
         
         await update.message.reply_text(
-            f"🤖 Bot rolled: {bot_rolls_text} = <b>{bot_total}</b>\n\n"
-            f"{user.mention_html()}, <b>Your turn!</b> Send {game_rolls} {emoji} emoji{'s' if game_rolls > 1 else ''} to respond.",
-            parse_mode=ParseMode.HTML
+            f"🤖 <b>Bot rolled:</b> {bot_rolls_text} = <b>{bot_total}</b>\n\n"
+            f"<b>What do you want to do?</b>\n\n"
+            f"💰 <b>Cashout Offer:</b> ${cashout_amount:.2f}\n"
+            f"🎲 <b>Or Roll:</b> Try to beat the bot!\n\n"
+            f"Choose your action:",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
     else:
         # User rolls first (default)
@@ -11218,7 +11323,7 @@ async def pvb_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Now call start_pvb_conversation to enter the conversation handler
         return await start_pvb_conversation_after_setup(query, context)
-
+    
     elif data.startswith("pvp_info_"):
         game_type_map = {"dice_bot": "dice", "football": "goal", "darts": "darts", "bowling": "bowl"}
         game_type = game_type_map.get(data.replace("pvp_info_", ""), "dice")
@@ -11245,6 +11350,222 @@ async def pvb_menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode=ParseMode.HTML,
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data=f"game_{data.replace('pvp_info_', '')}")]])
         )
+
+# --- PvB Cashout Callback ---
+async def pvb_cashout_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle cashout decision in PvB game"""
+    query = update.callback_query
+    user = query.from_user
+    
+    await query.answer()
+    
+    game_id = query.data.replace("pvb_cashout_", "")
+    
+    # Get game data
+    pvb_game = context.user_data.get('pvb_game')
+    if not pvb_game or pvb_game['game_id'] != game_id:
+        await query.edit_message_text("❌ Game session expired or invalid.")
+        return
+    
+    game = game_sessions.get(game_id)
+    if not game or game['status'] != 'active':
+        await query.edit_message_text("❌ Game not found or already finished.")
+        return
+    
+    # Credit cashout amount
+    cashout_amount = pvb_game['cashout_amount']
+    user_wallets[user.id] += cashout_amount
+    
+    # Update game status
+    game['status'] = 'cashed_out'
+    game['cashout_amount'] = cashout_amount
+    profit = cashout_amount - pvb_game['bet_amount']
+    
+    # Update stats (cashout counts as neither win nor loss for stats purposes)
+    update_stats_on_bet(user.id, game_id, pvb_game['bet_amount'], False, multiplier=0, context=context)
+    update_pnl(user.id)
+    save_user_data(user.id)
+    
+    # Clean up active game tracking
+    if f"active_pvb_game_{user.id}" in context.chat_data:
+        del context.chat_data[f"active_pvb_game_{user.id}"]
+    if user.id in active_pvb_games:
+        del active_pvb_games[user.id]
+    if 'pvb_game' in context.user_data:
+        del context.user_data['pvb_game']
+    
+    # Show result with Play Again buttons
+    keyboard = [
+        [InlineKeyboardButton(f"🔄 Play Again (${pvb_game['bet_amount']:.2f})", 
+                             callback_data=f"pvb_playagain_{pvb_game['game_type']}_{pvb_game['bet_amount']}_{pvb_game['game_mode']}_{pvb_game['game_rolls']}_{pvb_game['target_score']}")],
+        [InlineKeyboardButton(f"💰 Double Bet (${pvb_game['bet_amount']*2:.2f})", 
+                             callback_data=f"pvb_double_{pvb_game['game_type']}_{pvb_game['bet_amount']*2:.2f}_{pvb_game['game_mode']}_{pvb_game['game_rolls']}_{pvb_game['target_score']}")]
+    ]
+    
+    await query.edit_message_text(
+        f"✅ <b>CASHED OUT!</b>\n\n"
+        f"🤖 <b>Bot Score:</b> {pvb_game['bot_score']}\n"
+        f"💰 <b>Cashout Amount:</b> ${cashout_amount:.2f}\n"
+        f"📊 <b>Profit:</b> ${profit:+.2f}\n\n"
+        f"💼 <b>New Balance:</b> ${user_wallets[user.id]:.2f}\n\n"
+        f"Game ID: <code>{game_id}</code>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+# --- PvB Roll Callback ---
+async def pvb_roll_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle user's decision to roll in PvB game"""
+    query = update.callback_query
+    user = query.from_user
+    
+    await query.answer()
+    
+    game_id = query.data.replace("pvb_roll_", "")
+    
+    # Get game data
+    pvb_game = context.user_data.get('pvb_game')
+    if not pvb_game or pvb_game['game_id'] != game_id:
+        await query.edit_message_text("❌ Game session expired or invalid.")
+        return
+    
+    game = game_sessions.get(game_id)
+    if not game or game['status'] != 'active':
+        await query.edit_message_text("❌ Game not found or already finished.")
+        return
+    
+    # Inform user to roll
+    emoji = pvb_game['emoji']
+    game_rolls = pvb_game['game_rolls']
+    
+    await query.edit_message_text(
+        f"🎲 <b>Your Turn!</b>\n\n"
+        f"🤖 Bot scored: <b>{pvb_game['bot_score']}</b>\n\n"
+        f"Send {game_rolls} {emoji} emoji{'s' if game_rolls > 1 else ''} to roll!",
+        parse_mode=ParseMode.HTML
+    )
+    
+    # Game will continue via dice handler when user sends emoji
+
+# --- PvB Play Again Callback ---
+async def pvb_playagain_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start a new PvB game with same parameters"""
+    query = update.callback_query
+    user = query.from_user
+    
+    await query.answer()
+    
+    # Parse callback data: pvb_playagain_{game_type}_{bet_amount}_{game_mode}_{game_rolls}_{target_score}
+    parts = query.data.split("_")
+    if len(parts) < 6:
+        await query.edit_message_text("❌ Invalid game parameters.")
+        return
+    
+    game_type = parts[2]
+    bet_amount = float(parts[3])
+    game_mode = parts[4]
+    game_rolls = int(parts[5])
+    target_score = int(parts[6])
+    
+    # Check balance
+    if user_wallets.get(user.id, 0.0) < bet_amount:
+        await query.answer("❌ Insufficient balance!", show_alert=True)
+        return
+    
+    # Set context data and start new game
+    context.user_data['bet_amount'] = bet_amount
+    context.user_data['game_mode'] = game_mode
+    context.user_data['game_rolls'] = game_rolls
+    context.user_data['game_type'] = game_type
+    context.user_data['bot_rolls_first'] = True  # Keep bot rolling first
+    
+    # Create a fake update to pass to play_vs_bot_game
+    class FakeMessage:
+        def __init__(self, text, chat, from_user):
+            self.text = text
+            self.chat = chat
+            self.from_user = from_user
+            
+        async def reply_text(self, *args, **kwargs):
+            return await query.message.reply_text(*args, **kwargs)
+            
+        async def reply_dice(self, *args, **kwargs):
+            return await query.message.reply_dice(*args, **kwargs)
+    
+    fake_update = Update(
+        update_id=query.message.message_id,
+        message=FakeMessage(
+            text=f"/pvb {game_type}",
+            chat=query.message.chat,
+            from_user=user
+        )
+    )
+    fake_update.effective_user = user
+    fake_update.effective_chat = query.message.chat
+    fake_update.message.chat = query.message.chat
+    
+    await query.edit_message_text("🔄 Starting new game...")
+    await play_vs_bot_game(fake_update, context, game_type, target_score)
+
+# --- PvB Double Bet Callback ---
+async def pvb_double_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start a new PvB game with doubled bet"""
+    query = update.callback_query
+    user = query.from_user
+    
+    await query.answer()
+    
+    # Parse callback data: pvb_double_{game_type}_{bet_amount}_{game_mode}_{game_rolls}_{target_score}
+    parts = query.data.split("_")
+    if len(parts) < 6:
+        await query.edit_message_text("❌ Invalid game parameters.")
+        return
+    
+    game_type = parts[2]
+    bet_amount = float(parts[3])
+    game_mode = parts[4]
+    game_rolls = int(parts[5])
+    target_score = int(parts[6])
+    
+    # Check balance
+    if user_wallets.get(user.id, 0.0) < bet_amount:
+        await query.answer("❌ Insufficient balance!", show_alert=True)
+        return
+    
+    # Set context data and start new game
+    context.user_data['bet_amount'] = bet_amount
+    context.user_data['game_mode'] = game_mode
+    context.user_data['game_rolls'] = game_rolls
+    context.user_data['game_type'] = game_type
+    context.user_data['bot_rolls_first'] = True  # Keep bot rolling first
+    
+    # Create a fake update to pass to play_vs_bot_game
+    class FakeMessage:
+        def __init__(self, text, chat, from_user):
+            self.text = text
+            self.chat = chat
+            self.from_user = from_user
+            
+        async def reply_text(self, *args, **kwargs):
+            return await query.message.reply_text(*args, **kwargs)
+            
+        async def reply_dice(self, *args, **kwargs):
+            return await query.message.reply_dice(*args, **kwargs)
+    
+    fake_update = Update(
+        update_id=query.message.message_id,
+        message=FakeMessage(
+            text=f"/pvb {game_type}",
+            chat=query.message.chat,
+            from_user=user
+        )
+    )
+    fake_update.effective_user = user
+    fake_update.effective_chat = query.message.chat
+    fake_update.message.chat = query.message.chat
+    
+    await query.edit_message_text("💰 Starting game with doubled bet...")
+    await play_vs_bot_game(fake_update, context, game_type, target_score)
 
 async def start_pvb_conversation_after_setup(query, context):
     """Helper function to enter the PvB conversation after mode and roll setup"""
@@ -11776,21 +12097,76 @@ async def message_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 user_wallets[user.id] += winnings
                 game['status'] = 'completed'
                 game['win'] = True
+                profit = winnings - game["bet_amount"]
                 update_stats_on_bet(user.id, game['id'], game['bet_amount'], True, context=context)
+                update_pnl(user.id)
+                save_user_data(user.id)
+                
+                # New result screen with Play Again buttons
+                game_type_display = game_type.replace("_", " ").capitalize()
+                keyboard = [
+                    [InlineKeyboardButton(f"🔄 Play Again (${game['bet_amount']:.2f})", 
+                                         callback_data=f"pvb_playagain_{game_type}_{game['bet_amount']}_{game_mode}_{game_rolls}_{game['target_score']}")],
+                    [InlineKeyboardButton(f"💰 Double Bet (${game['bet_amount']*2:.2f})", 
+                                         callback_data=f"pvb_double_{game_type}_{game['bet_amount']*2:.2f}_{game_mode}_{game_rolls}_{game['target_score']}")]
+                ]
+                
                 await asyncio.sleep(0.5)  # Rate limit protection
-                await update.message.reply_text(f"🏆 {user.mention_html()}, Congratulations! You beat the bot ({game['user_score']}-{game['bot_score']}) and win ${winnings:.2f}!", parse_mode=ParseMode.HTML)
+                await update.message.reply_text(
+                    f"🎰 <b>GAME OVER: {game_type_display}</b>\n\n"
+                    f"🤖 <b>Bot Score:</b> {game['bot_score']}\n"
+                    f"👤 <b>Your Score:</b> {game['user_score']}\n\n"
+                    f"📊 <b>Result:</b> 🏆 WIN\n"
+                    f"💰 <b>Profit:</b> ${profit:+.2f}\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"💼 <b>Wallet:</b> ${user_wallets[user.id]:.2f}\n\n"
+                    f"Game ID: <code>{game['id']}</code>",
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+                
                 del context.chat_data[f"active_pvb_game_{user.id}"]
                 if user.id in active_pvb_games:
                     del active_pvb_games[user.id]
+                if 'pvb_game' in context.user_data:
+                    del context.user_data['pvb_game']
+                    
             elif game["bot_score"] >= game["target_score"]:
                 game['status'] = 'completed'
                 game['win'] = False
+                loss = game["bet_amount"]
                 update_stats_on_bet(user.id, game['id'], game['bet_amount'], False, context=context)
+                update_pnl(user.id)
+                save_user_data(user.id)
+                
+                # New result screen with Play Again buttons
+                game_type_display = game_type.replace("_", " ").capitalize()
+                keyboard = [
+                    [InlineKeyboardButton(f"🔄 Play Again (${game['bet_amount']:.2f})", 
+                                         callback_data=f"pvb_playagain_{game_type}_{game['bet_amount']}_{game_mode}_{game_rolls}_{game['target_score']}")],
+                    [InlineKeyboardButton(f"💰 Double Bet (${game['bet_amount']*2:.2f})", 
+                                         callback_data=f"pvb_double_{game_type}_{game['bet_amount']*2:.2f}_{game_mode}_{game_rolls}_{game['target_score']}")]
+                ]
+                
                 await asyncio.sleep(0.5)  # Rate limit protection
-                await update.message.reply_text(f"😔 {user.mention_html()}, Bot wins the match ({game['bot_score']}-{game['user_score']}). You lost ${game['bet_amount']:.2f}.", parse_mode=ParseMode.HTML)
+                await update.message.reply_text(
+                    f"🎰 <b>GAME OVER: {game_type_display}</b>\n\n"
+                    f"🤖 <b>Bot Score:</b> {game['bot_score']}\n"
+                    f"👤 <b>Your Score:</b> {game['user_score']}\n\n"
+                    f"📊 <b>Result:</b> ❌ LOSS\n"
+                    f"💰 <b>Profit:</b> -${loss:.2f}\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"💼 <b>Wallet:</b> ${user_wallets[user.id]:.2f}\n\n"
+                    f"Game ID: <code>{game['id']}</code>",
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+                
                 del context.chat_data[f"active_pvb_game_{user.id}"]
                 if user.id in active_pvb_games:
                     del active_pvb_games[user.id]
+                if 'pvb_game' in context.user_data:
+                    del context.user_data['pvb_game']
             else: # Continue game - next round
                 await asyncio.sleep(0.5)  # Rate limit protection
                 
@@ -11831,10 +12207,37 @@ async def message_listener(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     bot_total = sum(bot_rolls)
                     bot_rolls_text = " + ".join(str(r) for r in bot_rolls)
                     
+                    # Calculate cashout offer for this round
+                    cashout_amount = calculate_cashout(bot_total, game['bet_amount'], game_type, game_mode, game_rolls)
+                    
+                    # Store game state in context for callbacks
+                    context.user_data['pvb_game'] = {
+                        'game_id': game['id'],
+                        'bot_score': bot_total,
+                        'cashout_amount': cashout_amount,
+                        'bet_amount': game['bet_amount'],
+                        'game_type': game_type,
+                        'game_mode': game_mode,
+                        'game_rolls': game_rolls,
+                        'emoji': expected_emoji,
+                        'target_score': game['target_score']
+                    }
+                    
+                    # Show cashout/roll buttons
+                    keyboard = [
+                        [InlineKeyboardButton(f"🎲 Roll (Your Turn)", callback_data=f"pvb_roll_{game['id']}")],
+                        [InlineKeyboardButton(f"💰 Cashout ${cashout_amount:.2f}", callback_data=f"pvb_cashout_{game['id']}")]
+                    ]
+                    
                     await update.message.reply_text(
-                        f"🤖 Bot rolled: {bot_rolls_text} = <b>{bot_total}</b>\n\n"
-                        f"<b>Your turn!</b> Send {game_rolls} {expected_emoji}!",
-                        parse_mode=ParseMode.HTML
+                        f"Score: You {game['user_score']} - {game['bot_score']} Bot. (First to {game['target_score']})\n\n"
+                        f"🤖 <b>Bot rolled:</b> {bot_rolls_text} = <b>{bot_total}</b>\n\n"
+                        f"<b>What do you want to do?</b>\n\n"
+                        f"💰 <b>Cashout Offer:</b> ${cashout_amount:.2f}\n"
+                        f"🎲 <b>Or Roll:</b> Try to beat the bot!\n\n"
+                        f"Choose your action:",
+                        parse_mode=ParseMode.HTML,
+                        reply_markup=InlineKeyboardMarkup(keyboard)
                     )
                 else:
                     # User rolls first for next round
@@ -15857,6 +16260,10 @@ def main():
     app.add_handler(CallbackQueryHandler(clear_confirm_callback, pattern=r"^(clear|clearall)_confirm_"))
     app.add_handler(CallbackQueryHandler(match_invite_callback, pattern=r"^(accept_|decline_)")); app.add_handler(CallbackQueryHandler(mines_pick_callback, pattern=r"^mines_"))
     app.add_handler(CallbackQueryHandler(stop_confirm_callback, pattern=r"^stop_confirm_")); app.add_handler(CallbackQueryHandler(pvb_menu_callback, pattern="^pvp_info_"))
+    app.add_handler(CallbackQueryHandler(pvb_cashout_callback, pattern=r"^pvb_cashout_"))  # NEW - PvB cashout
+    app.add_handler(CallbackQueryHandler(pvb_roll_callback, pattern=r"^pvb_roll_"))  # NEW - PvB roll
+    app.add_handler(CallbackQueryHandler(pvb_playagain_callback, pattern=r"^pvb_playagain_"))  # NEW - PvB play again
+    app.add_handler(CallbackQueryHandler(pvb_double_callback, pattern=r"^pvb_double_"))  # NEW - PvB double bet
     app.add_handler(CallbackQueryHandler(escrow_callback_handler, pattern=r"^escrow_")); app.add_handler(CallbackQueryHandler(users_navigation_callback, pattern=r"^users_"))
     app.add_handler(CallbackQueryHandler(language_callback, pattern=r"^lang_"))
     app.add_handler(CallbackQueryHandler(currency_callback, pattern=r"^setcurrency_")) # NEW - Currency setting
